@@ -34,7 +34,11 @@ def ask(env, question, default=""):
     return input(question)
 
 TOPIC = ask("TOPIC", "Video topic (leave empty = auto topic): ").strip()
-AUTO_NICHE = os.environ.get("AUTO_NICHE", "").strip() or "motivation, study habits and success stories for Indian students"
+AUTO_NICHE = os.environ.get("AUTO_NICHE", "").strip() or (
+    "learning videos for kids aged 2-8: alphabet ABC in small parts, numbers, colors, shapes, animals and their sounds, "
+    "fruits, vegetables, good habits, and short moral stories with cute animal characters"
+    + (", Hindi varnamala (swar and vyanjan)" if os.environ.get("VIDEO_LANG", "").lower().startswith("h") else ""))
+CHANNEL_NAME = os.environ.get("CHANNEL_NAME", "").strip() or "Kidzivora"   # shown as a © watermark on every video
 _lang = ask("VIDEO_LANG", "Language - en or hi (hindi) [en]: ", "hi")
 LANG = "hi" if _lang.strip().lower().startswith("h") else "en"
 _voice = ask("VOICE_GENDER", "Voice - m (male) or f (female) [f]: ", "f")
@@ -63,7 +67,8 @@ STYLE_SHORT = {"real": "photorealistic cinematic photograph, natural lighting, 3
 FONTS = ["/usr/share/fonts/truetype/noto/NotoSansDevanagari-Bold.ttf",
          "/usr/share/fonts/opentype/noto/NotoSansDevanagari-Bold.ttf",
          str(Path("out") / "fonts" / "NotoSansDevanagari-Bold.ttf"),
-         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
+         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"]
 SKIP = set()          # image services that failed with a real problem are skipped for the rest of the video
 SEED = int(time.time()) % 1000000   # one seed for every picture of this video (NVIDIA + Pollinations; Cloudflare does not accept a seed)
 CF_TEXT_MODELS = ["@cf/meta/llama-3.3-70b-instruct-fp8-fast", "@cf/meta/llama-3.1-8b-instruct"]   # free backup for the script
@@ -87,6 +92,13 @@ RULES for narration:
 - Build a mini story: setup, tension or fun conflict, twist, takeaway.
 - Last scene: one clear takeaway plus a call to action (follow / share / comment).
 - If the topic is funny, be playful and use light humor. If it is informational, be clear and accurate with NO made-up statistics.
+- Stay 100% on the topic. Every scene must be about the topic and nothing else.
+- If the topic is a LEARNING LIST (letters, numbers, colors, shapes, animals, fruits, Hindi varnamala, etc.):
+  cover exactly the items/range named in the topic, IN ORDER, one item per scene (two items per scene only if there are more items than scenes);
+  scene 1 can be a very short hook that already starts the list, the last scene is a quick recap + call to action;
+  the narration says the item clearly and simply (e.g. "A for Apple! A... A... Apple!");
+  the image_prompt shows ONLY that one item, big and centered on a simple plain background (no other objects, no letters);
+  "character" must be an empty string "".
 RULES for pictures:
 {{PIC_RULES}}
 - Use gentle words only (arguing, competing, surprised). Never use fight, battle, kill, blood, weapon.
@@ -283,12 +295,15 @@ def ensure_hindi_font():
     except Exception as e:
         print("could not get Hindi font, Hindi captions may show boxes:", str(e)[:80])
 
-def get_font(size):
+def get_font(size, text=""):
+    # Hindi text -> Devanagari font; English text -> DejaVu/Liberation (the Hindi font has no English letters)
     try:
         engine = ImageFont.Layout.RAQM   # joins Hindi letters (matras) correctly
     except Exception:
         engine = None
-    for fp in FONTS:
+    hindi = any("\u0900" <= ch <= "\u097f" for ch in text)
+    order = [fp for fp in FONTS if ("Devanagari" in fp) == hindi] + [fp for fp in FONTS if ("Devanagari" in fp) != hindi]
+    for fp in order:
         if Path(fp).exists():
             try:
                 return ImageFont.truetype(fp, size, layout_engine=engine)
@@ -303,7 +318,7 @@ def split_chunks(text, n=4):
 def caption_png(text, y_start, dst):
     layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
-    font = get_font(78)
+    font = get_font(78, text)
     lines = textwrap.wrap(text, width=17)[:2]
     for i, ln in enumerate(lines):
         tw = d.textlength(ln, font=font)
@@ -315,11 +330,11 @@ def word_caption_png(words, hi, y_start, dst):
     # one group of words, the word being spoken is yellow and bigger feel, others white
     layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
-    font = get_font(82)
+    font = get_font(82, " ".join(words))
     space = d.textlength(" ", font=font)
     lines, cur, cur_w = [], [], 0.0
     for i, w in enumerate(words):
-        ww = d.textlength(w, font=font)
+        ww = d.textlength(w, font=get_font(82, w))
         if cur and cur_w + space + ww > W - 120:
             lines.append(cur); cur, cur_w = [], 0.0
         cur_w += (space if cur else 0) + ww; cur.append((i, w, ww))
@@ -329,7 +344,7 @@ def word_caption_png(words, hi, y_start, dst):
         x = (W - total) / 2
         for i, w, ww in ln:
             col = (255, 224, 40, 255) if i == hi else (255, 255, 255, 255)
-            d.text((x, y_start + li * 108), w, font=font, fill=col, stroke_width=9, stroke_fill=(0, 0, 0, 255))
+            d.text((x, y_start + li * 108), w, font=get_font(82, w), fill=col, stroke_width=9, stroke_fill=(0, 0, 0, 255))
             x += ww + space
     layer.save(dst)
 
@@ -404,7 +419,16 @@ def scene_clip(sc, audio, out, idx):
          "-c:a", "aac", "-ar", str(SR), "-ac", "2", str(out)])
     return dur
 
-# ---------- 5. CINEMATIC JOIN: transitions + colour grade + vignette + film grain ----------
+# ---------- 5. CINEMATIC JOIN: transitions + colour grade + vignette + film grain + © watermark ----------
+def watermark_png(dst):
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    text = f"© {CHANNEL_NAME}"
+    font = get_font(44, text)
+    tw = d.textlength(text, font=font)
+    d.text((W - tw - 40, 60), text, font=font, fill=(255, 255, 255, 190), stroke_width=3, stroke_fill=(0, 0, 0, 140))
+    layer.save(dst)
+
 def join_clips(clips, durs, out):
     n = len(clips)
     names = ["fade", "smoothleft", "fade", "smoothright"]
@@ -419,8 +443,10 @@ def join_clips(clips, durs, out):
         fc += f"[{vprev}][{i}:v]xfade=transition={tr}:duration={TRANS}:offset={off:.3f}[xv{i}];"
         fc += f"[{aprev}][{i}:a]acrossfade=d={TRANS}[xa{i}];"
         vprev, aprev = f"xv{i}", f"xa{i}"
-    grade = "eq=contrast=1.07:saturation=1.12,vignette=PI/4.5,noise=alls=3:allf=t,format=yuv420p"
-    fc += f"[{vprev}]{grade}[vout]"
+    grade = "eq=contrast=1.07:saturation=1.12,vignette=PI/4.5,noise=alls=3:allf=t"
+    wm = OUT / "watermark.png"; watermark_png(wm)
+    inputs += ["-loop", "1", "-framerate", str(FPS), "-i", str(wm)]
+    fc += f"[{vprev}]{grade}[g];[g][{n}:v]overlay=0:0:shortest=1,format=yuv420p[vout]"
     run(["ffmpeg", "-y", *inputs, "-filter_complex", fc, "-map", "[vout]", "-map", f"[{aprev}]",
          "-c:v", "libx264", "-preset", "veryfast", "-crf", "25", "-maxrate", "6M", "-bufsize", "12M",
          "-c:a", "aac", "-ar", str(SR), str(out)])
@@ -506,7 +532,8 @@ def build_video(script):
     for i, sc in enumerate(script["scenes"]):
         print(f"scene {i+1}/{len(script['scenes'])}: picture, voice, camera move")
         raw, mp3, clip = OUT / f"s{i}_raw.png", OUT / f"s{i}.mp3", OUT / f"s{i}.mp4"
-        make_image(f"{script.get('character', '')}. {sc['image_prompt']}".strip(), raw, i)
+        ch = str(script.get("character", "") or "").strip()
+        make_image(f"{ch}. {sc['image_prompt']}" if ch else sc["image_prompt"], raw, i)
         words = make_voice(sc["narration"], mp3)
         layers = prepare_scene(raw, i, sc["narration"], audio_len(mp3), words)
         durs.append(scene_clip(layers, mp3, clip, i)); clips.append(clip)
