@@ -38,8 +38,12 @@ on:
         default: "private"
         type: choice
         options: ["private", "unlisted", "public"]
-  schedule:
-    - cron: "7 13 * * *"   # every day at 6:37 PM India time: auto topic + YouTube upload (if YouTube secrets are set)
+  schedule:   # 5 auto videos a day (India time). GitHub cron is UTC; may start a few minutes late.
+    - cron: "37 2 * * *"    #  8:07 AM IST -> Hindi
+    - cron: "37 6 * * *"    # 12:07 PM IST -> English
+    - cron: "37 10 * * *"   #  4:07 PM IST -> Hindi
+    - cron: "37 13 * * *"   #  7:07 PM IST -> English
+    - cron: "7 16 * * *"    #  9:37 PM IST -> Hindi
 
 permissions:
   contents: write   # lets the job publish the finished video as a GitHub Release (your site plays it from there)
@@ -68,12 +72,13 @@ jobs:
           NVIDIA_KEY: ${{ secrets.NVIDIA_KEY }}
           CF_TOKEN: ${{ secrets.CF_TOKEN }}
           TOPIC: ${{ inputs.topic }}
-          VIDEO_LANG: ${{ inputs.lang || vars.DAILY_LANG || 'hi' }}
+          VIDEO_LANG: ${{ inputs.lang || ((github.event.schedule == '37 6 * * *' || github.event.schedule == '37 13 * * *') && 'en' || 'hi') }}
           VOICE_GENDER: ${{ inputs.voice || vars.DAILY_VOICE || 'f' }}
-          IMAGE_STYLE: ${{ inputs.style || vars.DAILY_STYLE || 'real' }}
+          IMAGE_STYLE: ${{ inputs.style || vars.DAILY_STYLE || 'cartoon' }}
           AUTO_NICHE: ${{ vars.AUTO_NICHE }}
+          CHANNEL_NAME: ${{ vars.CHANNEL_NAME || 'Kidzivora' }}
           YT_UPLOAD: ${{ inputs.youtube || 'yes' }}
-          YT_PRIVACY: ${{ inputs.yt_privacy || vars.DAILY_PRIVACY || 'private' }}
+          YT_PRIVACY: ${{ inputs.yt_privacy || vars.DAILY_PRIVACY || 'public' }}
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
