@@ -1,4 +1,4 @@
-# ===== v3 REALISTIC - GitHub Actions version (run from the "Actions" tab -> Make video -> Run workflow) =====
+# ===== v4 - GitHub Actions version (run from your site, or Actions tab -> Make video -> Run workflow) =====
 # ffmpeg, fonts and pip packages are installed by .github/workflows/make-video.yml
 
 import os, re, json, time, math, asyncio, base64, subprocess, textwrap, urllib.parse, getpass, wave
@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 
 # ---------- INPUTS ----------
 # Keys come from GitHub repo Secrets (Settings -> Secrets and variables -> Actions). Topic/language/voice come from the Run workflow form.
-def secret(name, ask):
+def secret(name, ask, required=True):
     v = os.environ.get(name, "").strip()
     if v: return v
     try:
@@ -20,18 +20,26 @@ def secret(name, ask):
     except Exception:
         pass
     if os.environ.get("GITHUB_ACTIONS"):
+        if not required: return ""
         raise RuntimeError(f"Missing secret {name}: add it in repo Settings -> Secrets and variables -> Actions")
     return getpass.getpass(ask).strip()
 
-NVIDIA_KEY = secret("NVIDIA_KEY", "Paste your NVIDIA API key (nvapi-...): ")
+NVIDIA_KEY = secret("NVIDIA_KEY", "Paste your NVIDIA API key (nvapi-...), or press Enter to use only Cloudflare: ", required=False)
 CF_ID = "31fdd1f22c348a91b6da9d4a4e9c3b64"   # Cloudflare Account ID (not a secret)
 CF_TOKEN = secret("CF_TOKEN", "Paste your Cloudflare API token: ")
-TOPIC = (os.environ.get("TOPIC") or input("Video topic: ")).strip()
-_lang = os.environ.get("VIDEO_LANG") or input("Language - en or hi (hindi) [en]: ")
+def ask(env, question, default=""):
+    v = os.environ.get(env, "").strip()
+    if v or os.environ.get("GITHUB_ACTIONS"):
+        return v or default
+    return input(question)
+
+TOPIC = ask("TOPIC", "Video topic (leave empty = auto topic): ").strip()
+AUTO_NICHE = os.environ.get("AUTO_NICHE", "").strip() or "motivation, study habits and success stories for Indian students"
+_lang = ask("VIDEO_LANG", "Language - en or hi (hindi) [en]: ", "hi")
 LANG = "hi" if _lang.strip().lower().startswith("h") else "en"
-_voice = os.environ.get("VOICE_GENDER") or input("Voice - m (male) or f (female) [f]: ")
+_voice = ask("VOICE_GENDER", "Voice - m (male) or f (female) [f]: ", "f")
 VOICE_GENDER = "m" if _voice.strip().lower().startswith("m") else "f"
-_style = os.environ.get("IMAGE_STYLE") or input("Picture style - real (realistic humans) or cartoon [real]: ")
+_style = ask("IMAGE_STYLE", "Picture style - real (realistic humans) or cartoon [real]: ", "real")
 IMAGE_STYLE = "cartoon" if _style.strip().lower().startswith("c") else "real"
 
 # ---------- CONSTANTS ----------
@@ -57,6 +65,8 @@ FONTS = ["/usr/share/fonts/truetype/noto/NotoSansDevanagari-Bold.ttf",
          str(Path("out") / "fonts" / "NotoSansDevanagari-Bold.ttf"),
          "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
 SKIP = set()          # image services that failed with a real problem are skipped for the rest of the video
+SEED = int(time.time()) % 1000000   # one seed for every picture of this video -> same person/look in every scene
+CF_TEXT_MODELS = ["@cf/meta/llama-3.3-70b-instruct-fp8-fast", "@cf/meta/llama-3.1-8b-instruct"]   # free backup for the script
 
 def run(cmd):
     p = subprocess.run(cmd, capture_output=True, text=True)
@@ -103,24 +113,73 @@ Use exactly {SCENES} scenes."""
                    and not any(b in m.lower() for b in bad)]
     except Exception as e:
         print("could not list models:", e)
+    return llm_json(prompt, models, lambda d: d.get("scenes") and "narration" in d["scenes"][0] and "image_prompt" in d["scenes"][0])
+
+def _parse_json(text):
+    if isinstance(text, dict):
+        return text
+    text = re.sub(r"^```(?:json)?|```$", "", str(text).strip(), flags=re.M).strip()
+    return json.loads(text[text.find("{"): text.rfind("}") + 1])
+
+def llm_json(prompt, models, ok):
+    # 1) NVIDIA models, 2) Cloudflare Workers AI backup (free, same CF_TOKEN as the pictures)
+    hdr = {"Authorization": f"Bearer {NVIDIA_KEY}"}
     last = None
     for model in dict.fromkeys(models):
+        if not NVIDIA_KEY: break
         try:
-            r = requests.post(f"{base}/chat/completions", headers=hdr, timeout=120,
+            r = requests.post("https://integrate.api.nvidia.com/v1/chat/completions", headers=hdr, timeout=120,
                               json={"model": model, "temperature": 0.7, "max_tokens": 2500,
                                     "messages": [{"role": "user", "content": prompt}]})
             r.raise_for_status()
-            text = r.json()["choices"][0]["message"]["content"]
-            text = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.M).strip()
-            data = json.loads(text[text.find("{"): text.rfind("}") + 1])
-            if not data.get("scenes") or "narration" not in data["scenes"][0] or "image_prompt" not in data["scenes"][0]:
+            data = _parse_json(r.json()["choices"][0]["message"]["content"])
+            if not ok(data):
                 raise ValueError("reply had no proper scenes")
-            print("script made with", model)
+            print("text made with", model)
             return data
         except Exception as e:
             last = e
             print(f"  {model} failed, trying next ({str(e)[:80]})")
+            if "401" in str(e) or "403" in str(e):
+                print("  NVIDIA key rejected -> using Cloudflare backup"); break
+    for model in CF_TEXT_MODELS:
+        try:
+            r = requests.post(f"https://api.cloudflare.com/client/v4/accounts/{CF_ID}/ai/run/{model}",
+                              headers={"Authorization": f"Bearer {CF_TOKEN}"}, timeout=180,
+                              json={"messages": [{"role": "user", "content": prompt}], "max_tokens": 2500, "temperature": 0.7})
+            r.raise_for_status()
+            data = _parse_json(r.json()["result"]["response"])
+            if not ok(data):
+                raise ValueError("reply had no proper scenes")
+            print("text made with Cloudflare", model)
+            return data
+        except Exception as e:
+            last = e
+            print(f"  cloudflare {model} failed ({str(e)[:80]})")
     raise RuntimeError(f"No model worked: {last}")
+
+# ---------- 0. AUTO TOPIC (daily scheduled runs, or empty topic) ----------
+def previous_titles():
+    repo, tok = os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GH_TOKEN")
+    if not repo: return []
+    try:
+        h = {"Authorization": f"Bearer {tok}"} if tok else {}
+        r = requests.get(f"https://api.github.com/repos/{repo}/releases?per_page=60", headers=h, timeout=30)
+        return [x.get("name", "") for x in r.json() if x.get("tag_name", "").startswith("video-")]
+    except Exception:
+        return []
+
+def auto_topic():
+    lang = "Hindi written in English letters (Hinglish)" if LANG == "hi" else "English"
+    done = previous_titles()
+    prompt = f"""Suggest ONE fresh, catchy topic for a 45-60 second YouTube Short in this niche: {AUTO_NICHE}.
+It must be evergreen and positive, about ordinary people (no real famous people, no news, no politics, no religion).
+Write the topic in {lang}, max 12 words.
+Do NOT repeat any of these earlier topics: {json.dumps(done[:40], ensure_ascii=False)}
+Return ONLY valid JSON: {{"topic": "..."}}"""
+    data = llm_json(prompt, ["nvidia/nemotron-3.5-lightning-30b-a3b", "nvidia/nemotron-3-ultra-550b-a55b"],
+                    lambda d: bool(str(d.get("topic", "")).strip()))
+    return data["topic"].strip()
 
 # ---------- 2. IMAGES (Cloudflare FLUX -> NVIDIA -> Pollinations -> colour placeholder) ----------
 def placeholder(path, idx):
@@ -141,7 +200,7 @@ def make_image(prompt, path, idx):
             try:
                 r = requests.post(
                     f"https://api.cloudflare.com/client/v4/accounts/{CF_ID}/ai/run/@cf/black-forest-labs/flux-1-schnell",
-                    headers={"Authorization": f"Bearer {CF_TOKEN}"}, json={"prompt": pr, "steps": 4}, timeout=120)
+                    headers={"Authorization": f"Bearer {CF_TOKEN}"}, json={"prompt": pr, "steps": 4, "seed": SEED}, timeout=120)
                 if r.status_code in (401, 403):
                     print("  cloudflare token/permission problem:", r.text[:150]); SKIP.add("cf"); break
                 if r.status_code == 429:
@@ -155,7 +214,7 @@ def make_image(prompt, path, idx):
         try:
             r = requests.post("https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-schnell",
                               headers={"Authorization": f"Bearer {NVIDIA_KEY}", "Accept": "application/json"},
-                              json={"prompt": full, "width": 768, "height": 1344, "steps": 4}, timeout=30)
+                              json={"prompt": full, "width": 768, "height": 1344, "steps": 4, "seed": SEED}, timeout=30)
             r.raise_for_status()
             d = r.json()
             _save_b64(d.get("artifacts", [{}])[0].get("base64") or d.get("image"), path); return
@@ -165,7 +224,7 @@ def make_image(prompt, path, idx):
         try:
             time.sleep(6)
             url = "https://image.pollinations.ai/prompt/" + urllib.parse.quote(full)
-            r = requests.get(url, params={"width": 768, "height": 1344, "nologo": "true", "seed": idx}, timeout=60)
+            r = requests.get(url, params={"width": 768, "height": 1344, "nologo": "true", "seed": SEED}, timeout=60)
             r.raise_for_status()
             path.write_bytes(r.content); Image.open(path).verify(); return
         except Exception as e:
@@ -176,11 +235,24 @@ def make_image(prompt, path, idx):
 # ---------- 3. VOICE (edge-tts, free) ----------
 async def _tts(text, out):
     import edge_tts
-    await edge_tts.Communicate(text, VOICES[(LANG, VOICE_GENDER)], rate=VOICE_RATE).save(str(out))
+    try:
+        com = edge_tts.Communicate(text, VOICES[(LANG, VOICE_GENDER)], rate=VOICE_RATE, boundary="WordBoundary")
+    except TypeError:   # older edge-tts gives word timings by default
+        com = edge_tts.Communicate(text, VOICES[(LANG, VOICE_GENDER)], rate=VOICE_RATE)
+    words = []
+    with open(out, "wb") as f:
+        async for ch in com.stream():
+            if ch["type"] == "audio":
+                f.write(ch["data"])
+            elif ch["type"] == "WordBoundary":
+                st = ch["offset"] / 1e7
+                words.append((st, st + ch["duration"] / 1e7, ch["text"]))
+    return words
 
 def make_voice(text, out):
+    # returns [(start_sec, end_sec, word), ...] for word-by-word captions (empty list = fall back to old captions)
     with ThreadPoolExecutor() as ex:   # thread, because Colab already has a running event loop
-        ex.submit(asyncio.run, _tts(text, out)).result()
+        return ex.submit(asyncio.run, _tts(text, out)).result()
 
 def audio_len(p):
     return float(run(["ffprobe","-v","error","-show_entries","format=duration","-of","csv=p=0",str(p)]).strip())
@@ -232,7 +304,29 @@ def caption_png(text, y_start, dst):
                stroke_width=9, stroke_fill=(0, 0, 0, 255))
     layer.save(dst)
 
-def prepare_scene(raw, idx, text, voice_dur):
+def word_caption_png(words, hi, y_start, dst):
+    # one group of words, the word being spoken is yellow and bigger feel, others white
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    font = get_font(82)
+    space = d.textlength(" ", font=font)
+    lines, cur, cur_w = [], [], 0.0
+    for i, w in enumerate(words):
+        ww = d.textlength(w, font=font)
+        if cur and cur_w + space + ww > W - 120:
+            lines.append(cur); cur, cur_w = [], 0.0
+        cur_w += (space if cur else 0) + ww; cur.append((i, w, ww))
+    if cur: lines.append(cur)
+    for li, ln in enumerate(lines[:2]):
+        total = sum(x[2] for x in ln) + space * (len(ln) - 1)
+        x = (W - total) / 2
+        for i, w, ww in ln:
+            col = (255, 224, 40, 255) if i == hi else (255, 255, 255, 255)
+            d.text((x, y_start + li * 108), w, font=font, fill=col, stroke_width=9, stroke_fill=(0, 0, 0, 255))
+            x += ww + space
+    layer.save(dst)
+
+def prepare_scene(raw, idx, text, voice_dur, words=None):
     img = Image.open(raw).convert("RGB")
     square = (img.width / img.height) > 0.8
     if square:   # whole picture visible, blurred copy fills the rest of the tall frame
@@ -249,9 +343,19 @@ def prepare_scene(raw, idx, text, voice_dur):
         fg = fg.crop((l, t, l + W, t + H)); bg = Image.new("RGB", (W, H), (0, 0, 0)); fy = 0; text_y = 1420
     bg_p, fg_p = OUT / f"s{idx}_bg.png", OUT / f"s{idx}_fg.png"
     bg.save(bg_p); fg.save(fg_p)
+    caps = []
+    if words:   # word-by-word captions: groups of 3 words, the spoken word highlighted
+        for g in range(0, len(words), 3):
+            grp = words[g:g + 3]
+            for k, (st, en, w) in enumerate(grp):
+                nxt = words[g + k + 1][0] if g + k + 1 < len(words) else max(en, voice_dur)
+                cp = OUT / f"s{idx}_w{g + k}.png"
+                word_caption_png([x[2] for x in grp], k, text_y, cp)
+                caps.append((cp, TRANS + st, TRANS + nxt))
+        return dict(bg=bg_p, fg=fg_p, fw=fg.width, fh=fg.height, fy=fy, caps=caps)
     chunks = split_chunks(text)
     total_chars = sum(len(c) for c in chunks)
-    caps, t0 = [], TRANS
+    t0 = TRANS
     for j, c in enumerate(chunks):
         span = voice_dur * len(c) / total_chars
         cp = OUT / f"s{idx}_cap{j}.png"
@@ -412,8 +516,8 @@ def build_video(script):
         print(f"scene {i+1}/{len(script['scenes'])}: picture, voice, camera move")
         raw, mp3, clip = OUT / f"s{i}_raw.png", OUT / f"s{i}.mp3", OUT / f"s{i}.mp4"
         make_image(f"{script.get('character', '')}. {sc['image_prompt']}".strip(), raw, i)
-        make_voice(sc["narration"], mp3)
-        layers = prepare_scene(raw, i, sc["narration"], audio_len(mp3))
+        words = make_voice(sc["narration"], mp3)
+        layers = prepare_scene(raw, i, sc["narration"], audio_len(mp3), words)
         durs.append(scene_clip(layers, mp3, clip, i)); clips.append(clip)
     print("joining scenes with transitions + cinematic look...")
     joined = OUT / "joined.mp4"
@@ -422,13 +526,55 @@ def build_video(script):
     add_sound(joined, total, offsets, mood, OUT / "final.mp4")
     return OUT / "final.mp4"
 
+# ---------- 7. YOUTUBE UPLOAD (free YouTube Data API; needs YT_CLIENT_ID, YT_CLIENT_SECRET, YT_REFRESH_TOKEN secrets) ----------
+def upload_youtube(video, title, description, privacy):
+    cid, csec, rtok = (os.environ.get(k, "").strip() for k in ("YT_CLIENT_ID", "YT_CLIENT_SECRET", "YT_REFRESH_TOKEN"))
+    if not (cid and csec and rtok):
+        print("YouTube secrets missing -> skipping YouTube upload"); return None
+    tok = requests.post("https://oauth2.googleapis.com/token", timeout=30, data={
+        "client_id": cid, "client_secret": csec, "refresh_token": rtok, "grant_type": "refresh_token"})
+    tok.raise_for_status()
+    access = tok.json()["access_token"]
+    meta = {"snippet": {"title": title[:95], "description": description[:4900], "categoryId": "27",
+                        "tags": ["shorts", "motivation", "education"]},
+            "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False}}
+    size = Path(video).stat().st_size
+    r = requests.post("https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
+                      headers={"Authorization": f"Bearer {access}", "Content-Type": "application/json; charset=UTF-8",
+                               "X-Upload-Content-Type": "video/mp4", "X-Upload-Content-Length": str(size)},
+                      data=json.dumps(meta), timeout=60)
+    r.raise_for_status()
+    with open(video, "rb") as f:
+        up = requests.put(r.headers["Location"], data=f, timeout=900,
+                          headers={"Authorization": f"Bearer {access}", "Content-Type": "video/mp4"})
+    up.raise_for_status()
+    vid = up.json()["id"]
+    print(f"uploaded to YouTube ({privacy}): https://youtube.com/shorts/{vid}")
+    return vid
+
 ensure_hindi_font()
+if not TOPIC:
+    print("0/3 no topic given -> picking one automatically...")
+    TOPIC = auto_topic()
+    print("auto topic:", TOPIC)
 print("1/3 writing script...")
 script = write_script()
 (OUT / "script.json").write_text(json.dumps(script, ensure_ascii=False, indent=2), encoding="utf-8")
 print("2/3 building scenes...")
 final = build_video(script)
 print("3/3 DONE ->", final)
+
+# title + description for the GitHub release (your site) and YouTube
+_title = (script.get("title") or TOPIC).strip()
+_credit = (OUT / "music_credit.txt").read_text(encoding="utf-8") if (OUT / "music_credit.txt").exists() else ""
+_desc = "\n".join(s["narration"] for s in script["scenes"]) + ("\n\nMusic:\n" + _credit if _credit else "") + "\n\n#shorts"
+(OUT / "title.txt").write_text(_title, encoding="utf-8")
+(OUT / "release_notes.txt").write_text(f"Topic: {TOPIC}\nLanguage: {LANG} | Voice: {VOICE_GENDER} | Style: {IMAGE_STYLE}\n\n{_desc}", encoding="utf-8")
+if os.environ.get("YT_UPLOAD", "").lower() in ("yes", "true", "1"):
+    try:
+        upload_youtube(final, f"{_title} #shorts", _desc, os.environ.get("YT_PRIVACY", "private") or "private")
+    except Exception as e:
+        print("YouTube upload failed (video is still saved):", str(e)[:300])
 
 try:   # in Colab: show and download; on GitHub: the workflow uploads out/final.mp4 for you
     from IPython.display import Video, display
