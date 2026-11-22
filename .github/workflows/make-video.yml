@@ -19,6 +19,12 @@ on:
         default: "f"
         type: choice
         options: ["f", "m"]
+      style:
+        description: "Picture style (real = realistic humans, cartoon)"
+        required: true
+        default: "real"
+        type: choice
+        options: ["real", "cartoon"]
 
 jobs:
   make-video:
@@ -46,6 +52,7 @@ jobs:
           TOPIC: ${{ inputs.topic }}
           VIDEO_LANG: ${{ inputs.lang }}
           VOICE_GENDER: ${{ inputs.voice }}
+          IMAGE_STYLE: ${{ inputs.style }}
         run: python pipeline.py
 
       - name: Upload video
