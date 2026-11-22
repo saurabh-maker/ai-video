@@ -25,6 +25,8 @@ def secret(name, ask, required=True):
     return getpass.getpass(ask).strip()
 
 NVIDIA_KEY = secret("NVIDIA_KEY", "Paste your NVIDIA API key (nvapi-...), or press Enter to use only Cloudflare: ", required=False)
+NVIDIA_KEY_2 = secret("NVIDIA_KEY_2", "Paste your 2nd NVIDIA API key (backup), or press Enter to skip: ", required=False)
+NVIDIA_KEYS = [k for k in (NVIDIA_KEY, NVIDIA_KEY_2) if k]   # if key 1 is refused or rate-limited, key 2 is tried
 CF_ID = "31fdd1f22c348a91b6da9d4a4e9c3b64"   # Cloudflare Account ID (not a secret)
 CF_TOKEN = secret("CF_TOKEN", "Paste your Cloudflare API token: ")
 def ask(env, question, default=""):
@@ -45,10 +47,25 @@ _voice = ask("VOICE_GENDER", "Voice - m (male) or f (female) [f]: ", "f")
 VOICE_GENDER = "m" if _voice.strip().lower().startswith("m") else "f"
 _style = ask("IMAGE_STYLE", "Picture style - real (realistic humans) or cartoon [real]: ", "real")
 IMAGE_STYLE = "cartoon" if _style.strip().lower().startswith("c") else "real"
+_fmt = ask("VIDEO_FORMAT", "Video type - short (9:16, about 60 sec) or long (16:9 story video) [short]: ", "short")
+LONG = _fmt.strip().lower().startswith("l")
+STORY_GENRE, LONG_MINUTES = "moral", 5
+if LONG:
+    _g = ask("STORY_GENRE", "Story type - moral (kids learn a lesson), horror (kid-safe spooky), real (true story) or auto [moral]: ", "auto").strip().lower()
+    if _g.startswith("a"):   # auto (daily long video): moral -> horror -> real, changing every day
+        _g = ["moral", "horror", "real"][time.gmtime().tm_yday % 3]
+    STORY_GENRE = "horror" if _g.startswith("h") else ("real" if _g.startswith("r") else "moral")
+    if STORY_GENRE == "real" and IMAGE_STYLE == "real":
+        IMAGE_STYLE = "cartoon"   # real people are shown as illustrations, never as fake photos
+    try:
+        LONG_MINUTES = max(2, min(10, int(ask("LONG_MINUTES", "Length in minutes (2-10) [5]: ", "5").strip() or "5")))
+    except ValueError:
+        LONG_MINUTES = 5
 
 # ---------- CONSTANTS ----------
-SCENES = 10          # 10 scenes x ~15 words = about 60 seconds
-W, H, FPS = 1080, 1920, 25
+SCENES = LONG_MINUTES * 9 if LONG else 10   # ~15 words per scene: 10 scenes = about 60 seconds, 9 scenes per minute for long stories
+W, H, FPS = (1920, 1080, 25) if LONG else (1080, 1920, 25)
+IMG_W, IMG_H = (1344, 768) if LONG else (768, 1344)
 TRANS = 0.35          # seconds of cross-transition between scenes (also the voice lead-in)
 SR = 44100
 OUT = Path("out"); OUT.mkdir(exist_ok=True)
@@ -61,7 +78,7 @@ STYLES = {
              "no text, no letters, no logos, no watermark, not cartoon, not illustration, not 3d render"),
     "cartoon": "flat vector cartoon illustration, bold colors, simple shapes, clean background, main subject centered, vertical composition",
 }
-STYLE = STYLES[IMAGE_STYLE]
+STYLE = STYLES[IMAGE_STYLE] if not LONG else STYLES[IMAGE_STYLE].replace("vertical composition", "wide horizontal composition")
 STYLE_SHORT = {"real": "photorealistic cinematic photograph, natural lighting, 35mm lens",
                "cartoon": "cute colorful cartoon illustration, flat vector style"}[IMAGE_STYLE]
 FONTS = ["/usr/share/fonts/truetype/noto/NotoSansDevanagari-Bold.ttf",
@@ -125,7 +142,73 @@ Use exactly {SCENES} scenes."""
                    and not any(b in m.lower() for b in bad)]
     except Exception as e:
         print("could not list models:", e)
+    if LONG:
+        return write_long_script(models, pic)
     return llm_json(prompt, models, lambda d: d.get("scenes") and "narration" in d["scenes"][0] and "image_prompt" in d["scenes"][0])
+
+# ---------- 1b. LONG STORY SCRIPT (outline first, then chapter by chapter so the story stays on track) ----------
+import random
+SETTINGS = ["a small village in Rajasthan", "a busy street in Mumbai", "a forest near the Himalayas", "a farm in Punjab",
+            "a fishing village in Kerala", "a school in Lucknow", "a tea garden in Assam", "a riverside town in Bihar",
+            "a hill station in Uttarakhand", "an old haveli in Jaipur", "a mango orchard in Uttar Pradesh", "a jungle in Madhya Pradesh"]
+HEROES = ["a curious girl", "a shy boy", "a clever crow", "a little elephant", "a lazy lion cub", "a kind grandmother",
+          "a naughty monkey", "a brave tortoise", "twin siblings", "a talking parrot", "a small puppy", "a young farmer"]
+VALUES = ["honesty", "sharing", "courage", "kindness to animals", "hard work", "patience", "respecting elders",
+          "teamwork", "saving water", "telling the truth", "not being greedy", "gratitude", "helping others", "self-belief"]
+GENRE_RULES = {
+    "moral": ("an ORIGINAL moral story for kids (do NOT retell Panchatantra, Akbar-Birbal or any famous story). "
+              "Warm, simple, fun; one clear lesson kids learn; end with the moral said clearly."),
+    "horror": ("a KID-SAFE spooky mystery story (like a mysterious sound, a friendly ghost, a dark old house). "
+               "Mild suspense only: NO gore, blood, death, violence or truly scary images. The mystery gets a clever, "
+               "comforting explanation and a lesson about courage. Pictures must look mysterious but cute, never frightening."),
+    "real": ("a TRUE inspiring story from real history or real life (scientists, inventors, freedom fighters, sportspeople, "
+             "kind ordinary heroes), told simply for kids. Use ONLY well-known documented facts; do NOT invent quotes, dates or numbers; "
+             "if unsure, leave the detail out. Show real people only as illustrations, not photos."),
+}
+
+def write_long_script(models, pic):
+    language = "Hindi (Devanagari script)" if LANG == "hi" else "simple English"
+    chapters = max(3, round(SCENES / 9))
+    per = [SCENES // chapters + (1 if i < SCENES % chapters else 0) for i in range(chapters)]
+    seed_hint = ""
+    if STORY_GENRE != "real":
+        seed_hint = (f"For uniqueness, use these ingredients (change them only if they clash with the topic): "
+                     f"setting {random.choice(SETTINGS)}, main hero {random.choice(HEROES)}, value {random.choice(VALUES)}.")
+    outline_prompt = f"""You are a top kids' story writer. Plan a {LONG_MINUTES}-minute YouTube story video.
+Topic / idea: "{TOPIC}"
+Story type: {GENRE_RULES[STORY_GENRE]}
+{seed_hint}
+Narration language later: {language}.
+Make it engaging: a strong opening hook, a problem, rising tension, a twist, a satisfying ending.
+Return ONLY valid JSON, no markdown:
+{{"title": "catchy title in {language}", "mood": "playful or calm or dramatic", "character": "one line describing the main characters' look so they look the same in every picture (English)",
+ "chapters": [{{"name": "...", "summary": "2-3 sentences of what happens"}}]}}
+Use exactly {chapters} chapters."""
+    outline = llm_json(outline_prompt, models, lambda d: d.get("chapters") and d.get("title"))
+    chapters = max(1, min(chapters, len(outline["chapters"])))   # spread all scenes over the chapters the AI really gave
+    per = [SCENES // chapters + (1 if i < SCENES % chapters else 0) for i in range(chapters)]
+    print(f"story: {outline['title']} ({chapters} chapters, {SCENES} scenes)")
+    scenes = []
+    for ci, ch in enumerate(outline["chapters"][:chapters]):
+        k = per[ci] if ci < len(per) else 9
+        recent = " ".join(s["narration"] for s in scenes[-3:])
+        chap_prompt = f"""You are writing chapter {ci+1} of {chapters} of this kids' story video.
+Story type: {GENRE_RULES[STORY_GENRE]}
+Full outline: {json.dumps(outline, ensure_ascii=False)}
+This chapter: {ch.get("name","")} - {ch.get("summary","")}
+Story so far ends with: "{recent or '(this is the beginning)'}"
+Write exactly {k} scenes that continue smoothly from the story so far.
+Narration language: {language}. Each scene 14-17 words, like a storyteller talking to kids: simple, vivid, with feelings.
+{"The last scene must end the story and say the lesson clearly, then ask kids to like and subscribe." if ci == chapters - 1 else "Do not end the story yet."}
+RULES for pictures:
+{pic}
+- Use gentle words only. Never use fight, battle, kill, blood, weapon.
+- No text, letters or logos inside the pictures.
+Return ONLY valid JSON, no markdown: {{"scenes": [{{"narration": "...", "image_prompt": "..."}}]}}"""
+        part = llm_json(chap_prompt, models, lambda d: d.get("scenes") and "narration" in d["scenes"][0] and "image_prompt" in d["scenes"][0])
+        scenes += part["scenes"][:k]
+        print(f"  chapter {ci+1}/{chapters}: {len(part['scenes'][:k])} scenes")
+    return {"title": outline["title"], "mood": outline.get("mood", "calm"), "character": outline.get("character", ""), "scenes": scenes}
 
 def _parse_json(text):
     if isinstance(text, dict):
@@ -135,10 +218,12 @@ def _parse_json(text):
 
 def llm_json(prompt, models, ok):
     # 1) NVIDIA models, 2) Cloudflare Workers AI backup (free, same CF_TOKEN as the pictures)
-    hdr = {"Authorization": f"Bearer {NVIDIA_KEY}"}
     last = None
-    for model in dict.fromkeys(models):
-        if not NVIDIA_KEY: break
+    for kn, key in enumerate(NVIDIA_KEYS, 1):
+      hdr = {"Authorization": f"Bearer {key}"}
+      denied = 0
+      for model in dict.fromkeys(models):
+        if denied >= 3: break
         try:
             r = requests.post("https://integrate.api.nvidia.com/v1/chat/completions", headers=hdr, timeout=120,
                               json={"model": model, "temperature": 0.7, "max_tokens": 2500,
@@ -147,13 +232,14 @@ def llm_json(prompt, models, ok):
             data = _parse_json(r.json()["choices"][0]["message"]["content"])
             if not ok(data):
                 raise ValueError("reply had no proper scenes")
-            print("text made with", model)
+            print(f"text made with {model} (NVIDIA key {kn})")
             return data
         except Exception as e:
             last = e
             print(f"  {model} failed, trying next ({str(e)[:80]})")
-            if "401" in str(e) or "403" in str(e):
-                print("  NVIDIA key rejected -> using Cloudflare backup"); break
+            if "401" in str(e) or "403" in str(e) or "429" in str(e):   # one model can be blocked; give up on this key after 3 refusals
+                denied += 1
+                if denied >= 3: print(f"  NVIDIA key {kn} refused 3 times -> trying next key / Cloudflare backup")
     for model in CF_TEXT_MODELS:
         try:
             r = requests.post(f"https://api.cloudflare.com/client/v4/accounts/{CF_ID}/ai/run/{model}",
@@ -222,28 +308,29 @@ def make_image(prompt, path, idx):
                 _save_b64(r.json()["result"]["image"], path); return
             except Exception as e:
                 print(f"  cloudflare error (try {n+1}/3): {str(e)[:80]}")
-    if 'nv' not in SKIP and NVIDIA_KEY:
+    for kn, key in enumerate(NVIDIA_KEYS, 1):
+        if f"nv{kn}" in SKIP: continue
         try:
-            body = {"prompt": full, "width": 768, "height": 1344, "steps": 4, "seed": SEED}
+            body = {"prompt": full, "width": IMG_W, "height": IMG_H, "steps": 4, "seed": SEED}
             r = requests.post("https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-schnell",
-                              headers={"Authorization": f"Bearer {NVIDIA_KEY}", "Accept": "application/json"},
+                              headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
                               json=body, timeout=30)
             if r.status_code in (400, 422):
                 print("  nvidia image said:", r.text[:200])
                 body.pop("seed")
                 r = requests.post("https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-schnell",
-                                  headers={"Authorization": f"Bearer {NVIDIA_KEY}", "Accept": "application/json"},
+                                  headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
                                   json=body, timeout=30)
             r.raise_for_status()
             d = r.json()
             _save_b64(d.get("artifacts", [{}])[0].get("base64") or d.get("image"), path); return
         except Exception as e:
-            print(f"  nvidia image failed, skipping it from now on ({str(e)[:50]})"); SKIP.add("nv")
+            print(f"  nvidia image (key {kn}) failed, skipping this key from now on ({str(e)[:50]})"); SKIP.add(f"nv{kn}")
     if 'pl' not in SKIP:
         try:
             time.sleep(6)
             url = "https://image.pollinations.ai/prompt/" + urllib.parse.quote(full)
-            r = requests.get(url, params={"width": 768, "height": 1344, "nologo": "true", "seed": SEED}, timeout=60)
+            r = requests.get(url, params={"width": IMG_W, "height": IMG_H, "nologo": "true", "seed": SEED}, timeout=60)
             r.raise_for_status()
             path.write_bytes(r.content); Image.open(path).verify(); return
         except Exception as e:
@@ -350,8 +437,19 @@ def word_caption_png(words, hi, y_start, dst):
 
 def prepare_scene(raw, idx, text, voice_dur, words=None):
     img = Image.open(raw).convert("RGB")
-    square = (img.width / img.height) > 0.8
-    if square:   # whole picture visible, blurred copy fills the rest of the tall frame
+    fx = 0
+    if LONG:     # 16:9 frame: wide picture fills it; square picture centred with a blurred copy at the sides
+        s = max(W / img.width, H / img.height)
+        bg = img.resize((int(img.width * s), int(img.height * s)))
+        l, t = (bg.width - W) // 2, (bg.height - H) // 2
+        bg = bg.crop((l, t, l + W, t + H))
+        if img.width / img.height > 1.3:
+            fg = bg; bg = Image.new("RGB", (W, H), (0, 0, 0))
+        else:
+            bg = ImageEnhance.Brightness(bg.filter(ImageFilter.GaussianBlur(45))).enhance(0.65)
+            fg = img.resize((H, H)); fx = (W - H) // 2
+        fy = 0; text_y = H - 250
+    elif (img.width / img.height) > 0.8:   # whole picture visible, blurred copy fills the rest of the tall frame
         s = max(W / img.width, H / img.height)
         bg = img.resize((int(img.width * s), int(img.height * s)))
         l, t = (bg.width - W) // 2, (bg.height - H) // 2
@@ -374,7 +472,7 @@ def prepare_scene(raw, idx, text, voice_dur, words=None):
                 cp = OUT / f"s{idx}_w{g + k}.png"
                 word_caption_png([x[2] for x in grp], k, text_y, cp)
                 caps.append((cp, TRANS + st, TRANS + nxt))
-        return dict(bg=bg_p, fg=fg_p, fw=fg.width, fh=fg.height, fy=fy, caps=caps)
+        return dict(bg=bg_p, fg=fg_p, fw=fg.width, fh=fg.height, fx=fx, fy=fy, caps=caps)
     chunks = split_chunks(text)
     total_chars = sum(len(c) for c in chunks)
     t0 = TRANS
@@ -383,7 +481,7 @@ def prepare_scene(raw, idx, text, voice_dur, words=None):
         cp = OUT / f"s{idx}_cap{j}.png"
         caption_png(c, text_y, cp)
         caps.append((cp, t0, t0 + span)); t0 += span
-    return dict(bg=bg_p, fg=fg_p, fw=fg.width, fh=fg.height, fy=fy, caps=caps)
+    return dict(bg=bg_p, fg=fg_p, fw=fg.width, fh=fg.height, fx=fx, fy=fy, caps=caps)
 
 MOTIONS = [  # gentle camera moves (small zoom so characters near the edges are never cut off)
     "z='1+0.10*on/{F}':x='(iw-iw/zoom)/2':y='(ih-ih/zoom)/2'",          # slow zoom in
@@ -407,7 +505,7 @@ def scene_clip(sc, audio, out, idx):
     a_idx = 2 + len(sc["caps"])
     fg_chain = (f"[1:v]scale={int(sc['fw']*k)}:{int(sc['fh']*k)},"
                 f"zoompan={motion}:d={F}:s={sc['fw']}x{sc['fh']}:fps={FPS}[fg];"
-                f"[0:v][fg]overlay=0:{sc['fy']}:shortest=1[b0];")
+                f"[0:v][fg]overlay={sc.get('fx', 0)}:{sc['fy']}:shortest=1[b0];")
     chain, prev = "", "b0"
     for j, (_, t0, t1) in enumerate(sc["caps"]):
         chain += f"[{prev}][{2+j}:v]overlay=0:0:enable='between(t,{t0:.2f},{t1:.2f})'[b{j+1}];"
@@ -451,6 +549,21 @@ def join_clips(clips, durs, out):
          "-c:v", "libx264", "-preset", "veryfast", "-crf", "25", "-maxrate", "6M", "-bufsize", "12M",
          "-c:a", "aac", "-ar", str(SR), str(out)])
     return offsets, sum(durs) - (n - 1) * TRANS
+
+def join_many(clips, durs, out, size=10):
+    # long videos: join 10 scenes at a time (keeps ffmpeg memory low), then glue the parts together
+    if len(clips) <= size + 2:
+        return join_clips(clips, durs, out)
+    parts, total = [], 0.0
+    for i in range(0, len(clips), size):
+        pp = OUT / f"part{i // size}.mp4"
+        _, t = join_clips(clips[i:i + size], durs[i:i + size], pp)
+        parts.append(pp); total += t
+        print(f"  joined part {i // size + 1}/{(len(clips) + size - 1) // size}")
+    lst = OUT / "parts.txt"
+    lst.write_text("".join(f"file '{p.resolve()}'\n" for p in parts), encoding="utf-8")
+    run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(out)])
+    return [], total
 
 # ---------- 6. BACKGROUND MUSIC (soft royalty-free tracks, auto-lowered under the voice) ----------
 # Tracks by Kevin MacLeod (incompetech.com), free under CC BY 4.0 -> put the credit line (saved in out/music_credit.txt) in your video description.
@@ -539,7 +652,7 @@ def build_video(script):
         durs.append(scene_clip(layers, mp3, clip, i)); clips.append(clip)
     print("joining scenes with transitions + cinematic look...")
     joined = OUT / "joined.mp4"
-    offsets, total = join_clips(clips, durs, joined)
+    offsets, total = join_many(clips, durs, joined)
     print(f"adding music ({mood}) and sound effects...")
     add_sound(joined, total, offsets, mood, OUT / "final.mp4")
     return OUT / "final.mp4"
@@ -571,6 +684,8 @@ def upload_youtube(video, title, description, privacy):
     return vid
 
 ensure_hindi_font()
+if not TOPIC and LONG:
+    TOPIC = f"any original {STORY_GENRE} story idea of your choice"
 if not TOPIC:
     print("0/3 no topic given -> picking one automatically...")
     TOPIC = auto_topic()
@@ -585,12 +700,12 @@ print("3/3 DONE ->", final)
 # title + description for the GitHub release (your site) and YouTube
 _title = (script.get("title") or TOPIC).strip()
 _credit = (OUT / "music_credit.txt").read_text(encoding="utf-8") if (OUT / "music_credit.txt").exists() else ""
-_desc = "\n".join(s["narration"] for s in script["scenes"]) + ("\n\nMusic:\n" + _credit if _credit else "") + "\n\n#shorts"
+_desc = "\n".join(s["narration"] for s in script["scenes"]) + ("\n\nMusic:\n" + _credit if _credit else "") + ("" if LONG else "\n\n#shorts")
 (OUT / "title.txt").write_text(_title, encoding="utf-8")
 (OUT / "release_notes.txt").write_text(f"Topic: {TOPIC}\nLanguage: {LANG} | Voice: {VOICE_GENDER} | Style: {IMAGE_STYLE}\n\n{_desc}", encoding="utf-8")
 if os.environ.get("YT_UPLOAD", "").lower() in ("yes", "true", "1"):
     try:
-        upload_youtube(final, f"{_title} #shorts", _desc, os.environ.get("YT_PRIVACY", "private") or "private")
+        upload_youtube(final, _title if LONG else f"{_title} #shorts", _desc, os.environ.get("YT_PRIVACY", "private") or "private")
     except Exception as e:
         print("YouTube upload failed (video is still saved):", str(e)[:300])
 
