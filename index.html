@@ -10,6 +10,7 @@
   body { margin:0; font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text); }
   .wrap { max-width:560px; margin:0 auto; padding:28px 18px 60px; }
   h1 { font-size:26px; margin:0 0 4px; }
+  h2 { font-size:18px; margin:26px 0 12px; }
   .sub { color:var(--muted); margin:0 0 22px; font-size:14px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; margin-bottom:16px; }
   label { display:block; font-size:13px; color:var(--muted); margin:12px 0 6px; }
@@ -17,6 +18,7 @@
   input, textarea, select { width:100%; padding:11px 12px; border-radius:10px; border:1px solid var(--line); background:#0f1115; color:var(--text); font-size:15px; font-family:inherit; }
   textarea { min-height:80px; resize:vertical; }
   .row { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; }
+  .row2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
   .seg { display:flex; gap:6px; }
   .seg button { flex:1; padding:10px 6px; border-radius:10px; border:1px solid var(--line); background:#0f1115; color:var(--text); cursor:pointer; font-size:14px; }
   .seg button.on { background:var(--accent); color:#111; border-color:var(--accent); font-weight:600; }
@@ -29,34 +31,40 @@
   .dot { display:inline-block; width:9px; height:9px; border-radius:50%; background:var(--accent); margin-right:8px; animation:pulse 1.2s infinite; }
   .dot.ok { background:var(--ok); animation:none; } .dot.bad { background:var(--bad); animation:none; }
   @keyframes pulse { 50% { opacity:.3; } }
-  .btn2 { display:inline-block; margin-top:10px; padding:10px 14px; border-radius:10px; background:var(--accent); color:#111 !important; text-decoration:none; font-weight:600; }
+  .btn2 { display:inline-block; margin-top:10px; padding:10px 14px; border-radius:10px; background:var(--accent); color:#111 !important; text-decoration:none; font-weight:600; font-size:14px; }
   .hidden { display:none; }
+  video { width:100%; max-height:70vh; border-radius:12px; background:#000; margin-top:10px; aspect-ratio:9/16; }
+  .vid h3 { margin:0; font-size:15px; }
+  .vid .when { font-size:12px; color:var(--muted); margin-top:2px; }
+  .empty { color:var(--muted); font-size:14px; }
   @media (max-width:480px){ .row { grid-template-columns:1fr; } }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>AI Shorts Maker</h1>
-  <p class="sub">Type a topic, pick options, and GitHub makes a 9:16 video for you.</p>
+  <p class="sub">Type a topic (or leave empty for an auto topic), pick options, and get a 9:16 video.</p>
 
-  <div class="card">
+  <div class="card" id="setupCard">
     <details id="setupBox">
-      <summary>⚙️ Setup (one time): GitHub token &amp; repo</summary>
-      <label>GitHub token (fine-grained, Actions: Read and write on this repo only)</label>
-      <input id="token" type="password" placeholder="github_pat_..." autocomplete="off">
-      <label>Repo owner</label>
-      <input id="owner" placeholder="your-github-username">
-      <label>Repo name</label>
-      <input id="repo" placeholder="ai-video">
+      <summary>⚙️ Setup</summary>
+      <label>Worker URL (public mode, no token needed)</label>
+      <input id="worker" placeholder="https://ai-shorts.yourname.workers.dev">
+      <p class="small">If a Worker URL is set, the token below is not used.</p>
+      <label>GitHub token (only for private mode without a Worker)</label>
+      <input id="token" type="password" placeholder="ghp_..." autocomplete="off">
+      <div class="row2">
+        <div><label>Repo owner</label><input id="owner" placeholder="your-github-username"></div>
+        <div><label>Repo name</label><input id="repo" placeholder="ai-video"></div>
+      </div>
       <label>Branch</label>
       <input id="branch" value="main">
-      <p class="small">Saved only in this browser (localStorage), never in the page code.
-        Create one at <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">GitHub → Fine-grained tokens</a>.</p>
+      <p class="small">Saved only in this browser (localStorage), never in the page code.</p>
     </details>
   </div>
 
   <div class="card">
-    <label>Video topic</label>
+    <label>Video topic (empty = auto topic)</label>
     <textarea id="topic" placeholder="e.g. Jo bachhe roz school jaate hain, woh bade hokar kya bante hain"></textarea>
 
     <div class="row">
@@ -74,35 +82,56 @@
       </div>
     </div>
 
+    <div class="row2">
+      <div>
+        <label>Post to YouTube Shorts</label>
+        <div class="seg" data-name="youtube"><button data-v="no" class="on">No</button><button data-v="yes">Yes</button></div>
+      </div>
+      <div>
+        <label>YouTube privacy</label>
+        <select id="yt_privacy"><option value="private">Private</option><option value="unlisted">Unlisted</option><option value="public">Public</option></select>
+      </div>
+    </div>
+
+    <div id="pwBox" class="hidden">
+      <label>Password</label>
+      <input id="password" type="password" placeholder="ask the site owner">
+    </div>
+
     <button class="go" id="go">🎬 Make video</button>
   </div>
 
   <div class="card hidden" id="statusCard">
     <div class="status" id="status"></div>
+    <div id="result"></div>
   </div>
+
+  <h2>📼 Videos made</h2>
+  <div id="videos"><p class="empty">Loading…</p></div>
 </div>
 
 <script>
+// Paste your Cloudflare Worker URL here so everyone gets public mode automatically (or set it in Setup):
+const DEFAULT_WORKER_URL = "";
 const WORKFLOW = "make-video.yml";
 const $ = id => document.getElementById(id);
-const choice = { lang: "hi", voice: "f", style: "real" };
+const choice = { lang: "hi", voice: "f", style: "real", youtube: "no" };
 
 // ---- save / load settings in this browser only ----
 function store(k, v) { try { localStorage.setItem("aisv_" + k, v); } catch (e) {} }
 function load(k) { try { return localStorage.getItem("aisv_" + k); } catch (e) { return null; } }
-["token", "owner", "repo", "branch"].forEach(k => {
+["worker", "token", "owner", "repo", "branch"].forEach(k => {
   const v = load(k); if (v) $(k).value = v;
-  $(k).addEventListener("change", () => store(k, $(k).value.trim()));
+  $(k).addEventListener("change", () => { store(k, $(k).value.trim()); init(); });
 });
-// guess owner/repo from a GitHub Pages address like username.github.io/ai-video
-(function guessRepo() {
+if (!$("worker").value && DEFAULT_WORKER_URL) $("worker").value = DEFAULT_WORKER_URL;
+(function guessRepo() {   // username.github.io/ai-video -> owner + repo
   const host = location.hostname;
   if (host.endsWith(".github.io")) {
     if (!$("owner").value) $("owner").value = host.split(".")[0];
     const seg = location.pathname.split("/").filter(Boolean)[0];
     if (!$("repo").value && seg && !seg.endsWith(".html")) $("repo").value = seg;
   }
-  if (!$("token").value) $("setupBox").open = true;
 })();
 
 // ---- option buttons ----
@@ -114,79 +143,124 @@ document.querySelectorAll(".seg").forEach(seg => {
   });
 });
 
-// ---- GitHub API ----
+// ---- two modes: Worker (public, no token) or direct GitHub token (private) ----
 function cfg() {
-  return { token: $("token").value.trim(), owner: $("owner").value.trim(),
-           repo: $("repo").value.trim(), branch: $("branch").value.trim() || "main" };
+  return { worker: $("worker").value.trim().replace(/\/+$/, ""), token: $("token").value.trim(),
+           owner: $("owner").value.trim(), repo: $("repo").value.trim(), branch: $("branch").value.trim() || "main" };
 }
-async function gh(path, opts = {}) {
+async function call(url, opts = {}, auth = true) {
   const c = cfg();
-  const r = await fetch(`https://api.github.com/repos/${c.owner}/${c.repo}${path}`, {
-    ...opts,
-    headers: { "Authorization": `Bearer ${c.token}`, "Accept": "application/vnd.github+json",
-               "X-GitHub-Api-Version": "2022-11-28", ...(opts.body ? { "Content-Type": "application/json" } : {}) }
-  });
-  if (!r.ok && r.status !== 204) {
-    let msg = ""; try { msg = (await r.json()).message; } catch (e) {}
-    throw new Error(`GitHub said ${r.status}: ${msg || r.statusText}`);
+  const headers = { ...(opts.body ? { "Content-Type": "application/json" } : {}) };
+  if (!c.worker) {
+    headers["Accept"] = "application/vnd.github+json";
+    headers["X-GitHub-Api-Version"] = "2022-11-28";
+    if (auth && c.token) headers["Authorization"] = `Bearer ${c.token}`;
   }
-  return r.status === 204 ? null : r.json();
+  const r = await fetch(url, { ...opts, headers });
+  if (r.status === 204) return null;
+  let data = {}; try { data = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error(`${c.worker ? "Server" : "GitHub"} said ${r.status}: ${data.message || r.statusText}`);
+  return data;
 }
+const ghBase = () => { const c = cfg(); return `https://api.github.com/repos/${c.owner}/${c.repo}`; };
+const api = {
+  runs: () => cfg().worker ? call(`${cfg().worker}/runs`) : call(`${ghBase()}/actions/workflows/${WORKFLOW}/runs?per_page=5`),
+  run: id => cfg().worker ? call(`${cfg().worker}/run?id=${id}`) : call(`${ghBase()}/actions/runs/${id}`),
+  make: inputs => cfg().worker
+    ? call(`${cfg().worker}/make`, { method: "POST", body: JSON.stringify({ ...inputs, password: $("password").value }) })
+    : call(`${ghBase()}/actions/workflows/${WORKFLOW}/dispatches`, { method: "POST", body: JSON.stringify({ ref: cfg().branch, inputs }) }),
+  videos: async () => {
+    if (cfg().worker) return call(`${cfg().worker}/videos`);
+    const d = await call(`${ghBase()}/releases?per_page=30`, {}, !!cfg().token);
+    return d.filter(x => (x.tag_name || "").startsWith("video-")).map(x => ({
+      tag: x.tag_name, name: x.name, date: x.published_at, body: x.body,
+      url: ((x.assets || []).find(a => a.name.endsWith(".mp4")) || {}).browser_download_url || null }));
+  },
+};
+
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const esc = s => String(s || "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 function show(html, kind = "") {
   $("statusCard").classList.remove("hidden");
   $("status").innerHTML = `<span class="dot ${kind}"></span>${html}`;
 }
+function videoCard(v) {
+  const when = v.date ? new Date(v.date).toLocaleString() : "";
+  return `<div class="card vid"><h3>${esc(v.name || v.tag)}</h3><div class="when">${esc(when)}</div>
+    ${v.url ? `<video controls preload="none" playsinline src="${esc(v.url)}"></video>
+    <a class="btn2" href="${esc(v.url)}" download>⬇ Download</a>` : `<p class="empty">Video file missing.</p>`}</div>`;
+}
+
+async function loadVideos() {
+  const c = cfg();
+  if (!c.worker && !(c.owner && c.repo)) { $("videos").innerHTML = `<p class="empty">Open Setup to connect your repo.</p>`; return; }
+  try {
+    const list = await api.videos();
+    $("videos").innerHTML = list.length ? list.map(videoCard).join("") : `<p class="empty">No videos yet. Make your first one!</p>`;
+  } catch (e) {
+    $("videos").innerHTML = `<p class="empty">Could not load videos (${esc(e.message)}).</p>`;
+  }
+}
+
+async function init() {
+  const c = cfg();
+  if (!c.worker && !c.token) $("setupBox").open = true;
+  $("pwBox").classList.add("hidden");
+  if (c.worker) {
+    try { const conf = await call(`${c.worker}/config`); if (conf.needsPassword) $("pwBox").classList.remove("hidden"); } catch (e) {}
+  }
+  loadVideos();
+}
+init();
 
 $("go").addEventListener("click", async () => {
   const c = cfg(), topic = $("topic").value.trim();
-  if (!c.token || !c.owner || !c.repo) { $("setupBox").open = true; show("Fill in the setup first (token, owner, repo).", "bad"); return; }
-  if (!topic) { show("Type a video topic first.", "bad"); return; }
-  ["token", "owner", "repo", "branch"].forEach(k => store(k, c[k]));
-  $("go").disabled = true;
+  if (!c.worker && (!c.token || !c.owner || !c.repo)) { $("setupBox").open = true; show("Fill in the setup first (Worker URL, or token + owner + repo).", "bad"); return; }
+  ["worker", "token", "owner", "repo", "branch"].forEach(k => store(k, c[k]));
+  $("go").disabled = true; $("result").innerHTML = "";
   try {
-    // remember the newest run BEFORE starting, so we can spot the new one (works even if the PC clock is off)
-    const before = await gh(`/actions/workflows/${WORKFLOW}/runs?per_page=1`);
+    // remember the newest job BEFORE starting, so we can spot the new one (works even if the PC clock is off)
+    const before = await api.runs();
     const lastId = ((before.workflow_runs || [])[0] || {}).id || 0;
-    show("Starting the video job on GitHub…");
-    await gh(`/actions/workflows/${WORKFLOW}/dispatches`, {
-      method: "POST",
-      body: JSON.stringify({ ref: c.branch, inputs: { topic, lang: choice.lang, voice: choice.voice, style: choice.style } })
-    });
+    show(topic ? "Starting the video job…" : "Starting the video job with an auto topic…");
+    await api.make({ topic, lang: choice.lang, voice: choice.voice, style: choice.style,
+                     youtube: choice.youtube, yt_privacy: $("yt_privacy").value });
 
-    // find the run we just started
     let run = null;
     for (let i = 0; i < 40 && !run; i++) {
       await sleep(3000);
-      const d = await gh(`/actions/workflows/${WORKFLOW}/runs?event=workflow_dispatch&per_page=5`);
+      const d = await api.runs();
       run = (d.workflow_runs || []).find(x => x.id > lastId);
     }
     if (!run) throw new Error("Job started but could not find it. Check the Actions tab on GitHub.");
 
-    // wait until it finishes
     const t0 = Date.now();
     while (true) {
-      run = await gh(`/actions/runs/${run.id}`);
+      run = await api.run(run.id);
       const mins = Math.floor((Date.now() - t0) / 60000), secs = Math.floor((Date.now() - t0) / 1000) % 60;
       if (run.status === "completed") break;
-      show(`Making your video… <b>${run.status}</b> (${mins}m ${secs}s). Usually 5–10 minutes. Keep this tab open.<br>
-            <a href="${run.html_url}" target="_blank" rel="noopener">Watch live log on GitHub</a>`);
+      show(`Making your video… <b>${esc(run.status)}</b> (${mins}m ${secs}s). Usually 5–10 minutes. Keep this tab open.<br>
+            <a href="${esc(run.html_url)}" target="_blank" rel="noopener">Watch live log on GitHub</a>`);
       await sleep(10000);
     }
 
     if (run.conclusion === "success") {
-      const a = await gh(`/actions/runs/${run.id}/artifacts`);
-      const art = (a.artifacts || [])[0];
-      show(`✅ Video ready!<br>
-            Open the run page and click <b>video</b> under "Artifacts" to download (zip with final.mp4).<br>
-            <a class="btn2" href="${run.html_url}#artifacts" target="_blank" rel="noopener">Download video</a>
-            ${art ? `<div class="small">Size: ${(art.size_in_bytes / 1048576).toFixed(1)} MB · kept for 7 days</div>` : ""}`, "ok");
+      show("✅ Video ready!", "ok");
+      let v = null;
+      for (let i = 0; i < 6 && !v; i++) {
+        const list = await api.videos().catch(() => []);
+        v = list.find(x => x.tag === `video-${run.id}`);
+        if (!v) await sleep(5000);
+      }
+      $("result").innerHTML = v ? videoCard(v)
+        : `<a class="btn2" href="${esc(run.html_url)}#artifacts" target="_blank" rel="noopener">Download from GitHub</a>`;
+      loadVideos();
     } else {
-      show(`❌ Job ended: <b>${run.conclusion}</b>.<br>
-            <a href="${run.html_url}" target="_blank" rel="noopener">Open the log</a>, copy the red error and paste it to Claude.`, "bad");
+      show(`❌ Job ended: <b>${esc(run.conclusion)}</b>.<br>
+            <a href="${esc(run.html_url)}" target="_blank" rel="noopener">Open the log</a>, copy the red error and paste it to Claude.`, "bad");
     }
   } catch (e) {
-    show(`❌ ${e.message}<br><span class="small">401 = wrong token · 403 = token needs Actions: Read and write · 404 = wrong owner/repo or workflow file missing · 422 = branch name wrong</span>`, "bad");
+    show(`❌ ${esc(e.message)}<br><span class="small">401 = wrong token or password · 403 = token needs repo + workflow · 404 = wrong owner/repo or workflow file missing · 422 = branch name wrong</span>`, "bad");
   } finally {
     $("go").disabled = false;
   }
