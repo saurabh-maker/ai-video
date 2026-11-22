@@ -1,0 +1,61 @@
+name: Make video
+
+on:
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: "Video topic"
+        required: true
+        type: string
+      lang:
+        description: "Language"
+        required: true
+        default: "hi"
+        type: choice
+        options: ["hi", "en"]
+      voice:
+        description: "Voice (f = female, m = male)"
+        required: true
+        default: "f"
+        type: choice
+        options: ["f", "m"]
+
+jobs:
+  make-video:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ffmpeg and fonts
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q ffmpeg fonts-noto-core fonts-dejavu-core
+
+      - name: Install Python packages
+        run: pip install edge-tts requests pillow numpy
+
+      - name: Make the video
+        env:
+          NVIDIA_KEY: ${{ secrets.NVIDIA_KEY }}
+          CF_TOKEN: ${{ secrets.CF_TOKEN }}
+          TOPIC: ${{ inputs.topic }}
+          VIDEO_LANG: ${{ inputs.lang }}
+          VOICE_GENDER: ${{ inputs.voice }}
+        run: python pipeline.py
+
+      - name: Upload video
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: video
+          path: |
+            out/final.mp4
+            out/script.json
+            out/music_credit.txt
+          if-no-files-found: warn
+          retention-days: 7
