@@ -38,11 +38,29 @@ on:
         default: "private"
         type: choice
         options: ["private", "unlisted", "public"]
-  schedule:   # 5 auto videos a day (India time). GitHub cron is UTC; may start a few minutes late.
+      video_format:
+        description: "Video type (short = 9:16 ~60s, long = 16:9 story)"
+        required: false
+        default: "short"
+        type: choice
+        options: ["short", "long"]
+      story_genre:
+        description: "Long story type (auto = rotate moral/horror/real)"
+        required: false
+        default: "auto"
+        type: choice
+        options: ["auto", "moral", "horror", "real"]
+      long_minutes:
+        description: "Long story length in minutes (2-10)"
+        required: false
+        default: "3"
+        type: string
+  schedule:   # 6 auto videos a day (5 Shorts + 1 long story) (India time). GitHub cron is UTC; may start a few minutes late.
     - cron: "37 2 * * *"    #  8:07 AM IST -> Hindi
     - cron: "37 6 * * *"    # 12:07 PM IST -> English
     - cron: "37 10 * * *"   #  4:07 PM IST -> Hindi
-    - cron: "10 13 * * *"   #  6:40 PM IST -> English (test time)
+    - cron: "37 12 * * *"   #  6:07 PM IST -> LONG Hindi story (3 min, story type rotates moral/horror/real)
+    - cron: "37 13 * * *"   #  7:07 PM IST -> English
     - cron: "7 16 * * *"    #  9:37 PM IST -> Hindi
 
 permissions:
@@ -51,7 +69,7 @@ permissions:
 jobs:
   make-video:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -70,11 +88,15 @@ jobs:
       - name: Make the video
         env:
           NVIDIA_KEY: ${{ secrets.NVIDIA_KEY }}
+          NVIDIA_KEY_2: ${{ secrets.NVIDIA_KEY_2 }}
           CF_TOKEN: ${{ secrets.CF_TOKEN }}
           TOPIC: ${{ inputs.topic }}
-          VIDEO_LANG: ${{ inputs.lang || ((github.event.schedule == '37 6 * * *' || github.event.schedule == '10 13 * * *') && 'en' || 'hi') }}
+          VIDEO_LANG: ${{ inputs.lang || ((github.event.schedule == '37 6 * * *' || github.event.schedule == '37 13 * * *') && 'en' || 'hi') }}
           VOICE_GENDER: ${{ inputs.voice || vars.DAILY_VOICE || 'f' }}
           IMAGE_STYLE: ${{ inputs.style || vars.DAILY_STYLE || 'cartoon' }}
+          VIDEO_FORMAT: ${{ inputs.video_format || (github.event.schedule == '37 12 * * *' && 'long' || 'short') }}
+          STORY_GENRE: ${{ inputs.story_genre || 'auto' }}
+          LONG_MINUTES: ${{ inputs.long_minutes || '3' }}
           AUTO_NICHE: ${{ vars.AUTO_NICHE }}
           CHANNEL_NAME: ${{ vars.CHANNEL_NAME || 'Kidzivora' }}
           YT_UPLOAD: ${{ inputs.youtube || 'yes' }}
