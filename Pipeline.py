@@ -31,6 +31,8 @@ _lang = os.environ.get("VIDEO_LANG") or input("Language - en or hi (hindi) [en]:
 LANG = "hi" if _lang.strip().lower().startswith("h") else "en"
 _voice = os.environ.get("VOICE_GENDER") or input("Voice - m (male) or f (female) [f]: ")
 VOICE_GENDER = "m" if _voice.strip().lower().startswith("m") else "f"
+_style = os.environ.get("IMAGE_STYLE") or input("Picture style - real (realistic humans) or cartoon [real]: ")
+IMAGE_STYLE = "cartoon" if _style.strip().lower().startswith("c") else "real"
 
 # ---------- CONSTANTS ----------
 SCENES = 8
@@ -41,10 +43,18 @@ OUT = Path("out"); OUT.mkdir(exist_ok=True)
 VOICES = {("en","f"): "en-IN-NeerjaNeural", ("en","m"): "en-IN-PrabhatNeural",
           ("hi","f"): "hi-IN-SwaraNeural",   ("hi","m"): "hi-IN-MadhurNeural"}
 VOICE_RATE = "+6%"    # "+0%" slower, "+12%" faster
-STYLE = ("photorealistic cinematic photograph, shot on 35mm lens, natural soft lighting, shallow depth of field, "
-         "realistic skin texture and faces, true-to-life colors, high detail, sharp focus, vertical composition, "
-         "no text, no letters, no logos, no watermark, not cartoon, not illustration, not 3d render")
+STYLES = {
+    "real": ("photorealistic cinematic photograph, shot on 35mm lens, natural soft lighting, shallow depth of field, "
+             "realistic skin texture and faces, true-to-life colors, high detail, sharp focus, vertical composition, "
+             "no text, no letters, no logos, no watermark, not cartoon, not illustration, not 3d render"),
+    "cartoon": "flat vector cartoon illustration, bold colors, simple shapes, clean background, main subject centered, vertical composition",
+}
+STYLE = STYLES[IMAGE_STYLE]
+STYLE_SHORT = {"real": "photorealistic cinematic photograph, natural lighting, 35mm lens",
+               "cartoon": "cute colorful cartoon illustration, flat vector style"}[IMAGE_STYLE]
 FONTS = ["/usr/share/fonts/truetype/noto/NotoSansDevanagari-Bold.ttf",
+         "/usr/share/fonts/opentype/noto/NotoSansDevanagari-Bold.ttf",
+         str(Path("out") / "fonts" / "NotoSansDevanagari-Bold.ttf"),
          "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
 SKIP = set()          # image services that failed with a real problem are skipped for the rest of the video
 
@@ -68,14 +78,20 @@ RULES for narration:
 - Last scene: one clear takeaway plus a call to action (follow / share / comment).
 - If the topic is funny, be playful and use light humor. If it is informational, be clear and accurate with NO made-up statistics.
 RULES for pictures:
-- "character": one line describing the main real-looking people (age, gender, skin tone, hair, face, clothes) so they look the same in every scene.
-- Each "image_prompt" is in English and describes a REAL PHOTO: the action, facial emotion, camera angle (close-up, wide shot, over-the-shoulder), real location and lighting (office, street, home, golden hour). Do NOT repeat the character line, it is added automatically.
+{{PIC_RULES}}
 - Use gentle words only (arguing, competing, surprised). Never use fight, battle, kill, blood, weapon.
 - No text, letters or logos inside the pictures.
 - "mood" is the background music style: exactly one of playful, calm, dramatic.
 Return ONLY valid JSON, no markdown:
 {{"title": "...", "mood": "playful", "character": "...", "scenes": [{{"narration": "...", "image_prompt": "..."}}]}}
 Use exactly {SCENES} scenes."""
+    if IMAGE_STYLE == "real":
+        pic = ('- "character": one line describing the main real-looking people (age, gender, skin tone, hair, face, clothes) so they look the same in every scene.\n'
+               '- Each "image_prompt" is in English and describes a REAL PHOTO: the action, facial emotion, camera angle (close-up, wide shot, over-the-shoulder), real location and lighting (office, street, home, golden hour). Do NOT repeat the character line, it is added automatically.')
+    else:
+        pic = ('- "character": one line describing the main cartoon characters\' look (colors, faces, clothes) so they look the same in every scene.\n'
+               '- Each "image_prompt" is in English: describe the action, emotion, camera angle and background. Do NOT repeat the character line, it is added automatically.')
+    prompt = prompt.replace("{PIC_RULES}", pic)
     models = ["nvidia/nemotron-3-ultra-550b-a55b", "meta/llama-3.3-70b-instruct",
               "nvidia/llama-3.3-nemotron-super-49b-v1", "nvidia/llama-3.1-nemotron-70b-instruct",
               "meta/llama-3.1-70b-instruct", "nvidia/nemotron-3-super-120b"]
@@ -119,8 +135,8 @@ def make_image(prompt, path, idx):
     full = f"{prompt}, {STYLE}"
     if CF_ID and CF_TOKEN and 'cf' not in SKIP:
         tries = [full,
-                 f"{prompt[:180]}, photorealistic cinematic photograph, natural lighting, 35mm lens",
-                 f"{TOPIC}, photorealistic cinematic photograph, natural lighting, 35mm lens"]
+                 f"{prompt[:180]}, {STYLE_SHORT}",
+                 f"{TOPIC}, {STYLE_SHORT}"]
         for n, pr in enumerate(tries):
             try:
                 r = requests.post(
@@ -170,10 +186,35 @@ def audio_len(p):
     return float(run(["ffprobe","-v","error","-show_entries","format=duration","-of","csv=p=0",str(p)]).strip())
 
 # ---------- 4. SCENE LAYERS (background, moving picture, timed captions) ----------
+HINDI_FONT_URL = ("https://raw.githubusercontent.com/notofonts/notofonts.github.io/main/fonts/"
+                  "NotoSansDevanagari/hinted/ttf/NotoSansDevanagari-Bold.ttf")
+
+def ensure_hindi_font():
+    # Hindi needs a Devanagari font, otherwise captions show empty boxes. Download it once if the system has none.
+    if any(Path(fp).exists() and "Devanagari" in fp for fp in FONTS):
+        return
+    dst = OUT / "fonts" / "NotoSansDevanagari-Bold.ttf"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        r = requests.get(HINDI_FONT_URL, timeout=60)
+        r.raise_for_status()
+        dst.write_bytes(r.content)
+        ImageFont.truetype(str(dst), 20)
+        print("downloaded Hindi font")
+    except Exception as e:
+        print("could not get Hindi font, Hindi captions may show boxes:", str(e)[:80])
+
 def get_font(size):
+    try:
+        engine = ImageFont.Layout.RAQM   # joins Hindi letters (matras) correctly
+    except Exception:
+        engine = None
     for fp in FONTS:
         if Path(fp).exists():
-            return ImageFont.truetype(fp, size)
+            try:
+                return ImageFont.truetype(fp, size, layout_engine=engine)
+            except Exception:
+                return ImageFont.truetype(fp, size)
     return ImageFont.load_default()
 
 def split_chunks(text, n=4):
@@ -381,6 +422,7 @@ def build_video(script):
     add_sound(joined, total, offsets, mood, OUT / "final.mp4")
     return OUT / "final.mp4"
 
+ensure_hindi_font()
 print("1/3 writing script...")
 script = write_script()
 (OUT / "script.json").write_text(json.dumps(script, ensure_ascii=False, indent=2), encoding="utf-8")
