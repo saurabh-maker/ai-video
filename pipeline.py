@@ -43,7 +43,7 @@ _style = ask("IMAGE_STYLE", "Picture style - real (realistic humans) or cartoon 
 IMAGE_STYLE = "cartoon" if _style.strip().lower().startswith("c") else "real"
 
 # ---------- CONSTANTS ----------
-SCENES = 8
+SCENES = 10          # 10 scenes x ~15 words = about 60 seconds
 W, H, FPS = 1080, 1920, 25
 TRANS = 0.35          # seconds of cross-transition between scenes (also the voice lead-in)
 SR = 44100
@@ -79,11 +79,11 @@ def write_script():
     base = "https://integrate.api.nvidia.com/v1"
     hdr = {"Authorization": f"Bearer {NVIDIA_KEY}"}
     language = "Hindi (Devanagari script)" if LANG == "hi" else "simple English"
-    prompt = f"""You are a top short-video storyteller. Write a 45-60 second vertical video script about: "{TOPIC}".
+    prompt = f"""You are a top short-video storyteller. Write a 60 second vertical video script about: "{TOPIC}".
 Narration language: {language}.
 RULES for narration:
 - Scene 1 is a strong HOOK (a surprising question or bold line), not an introduction.
-- Talk like a friend, not a textbook. Short, punchy sentences. Max 16 words per scene.
+- Talk like a friend, not a textbook. Short, punchy sentences. Each scene 14-17 words (total about 150-160 words, so the video is about 60 seconds).
 - Build a mini story: setup, tension or fun conflict, twist, takeaway.
 - Last scene: one clear takeaway plus a call to action (follow / share / comment).
 - If the topic is funny, be playful and use light humor. If it is informational, be clear and accurate with NO made-up statistics.
@@ -172,7 +172,7 @@ def previous_titles():
 def auto_topic():
     lang = "Hindi written in English letters (Hinglish)" if LANG == "hi" else "English"
     done = previous_titles()
-    prompt = f"""Suggest ONE fresh, catchy topic for a 45-60 second YouTube Short in this niche: {AUTO_NICHE}.
+    prompt = f"""Suggest ONE fresh, catchy topic for a 60 second YouTube Short in this niche: {AUTO_NICHE}.
 It must be evergreen and positive, about ordinary people (no real famous people, no news, no politics, no religion).
 Write the topic in {lang}, max 12 words.
 Do NOT repeat any of these earlier topics: {json.dumps(done[:40], ensure_ascii=False)}
