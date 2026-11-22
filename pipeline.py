@@ -87,7 +87,9 @@ FONTS = ["/usr/share/fonts/truetype/noto/NotoSansDevanagari-Bold.ttf",
          "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
          "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"]
 SKIP = set()          # image services that failed with a real problem are skipped for the rest of the video
-SEED = int(time.time()) % 1000000   # one seed for every picture of this video (NVIDIA + Pollinations; Cloudflare does not accept a seed)
+FAILS = {}            # temporary failures (timeout, busy) per service; a service is skipped only after 3 in a row
+DEAD = set()          # text models that NVIDIA has retired (404/410) - not tried again in this run
+SEED = int(time.time()) % 1000000   # one seed for every picture of this video (Pollinations only; Cloudflare and NVIDIA do not accept a seed)
 CF_TEXT_MODELS = ["@cf/meta/llama-3.3-70b-instruct-fp8-fast", "@cf/meta/llama-3.1-8b-instruct"]   # free backup for the script
 
 def run(cmd):
@@ -131,9 +133,7 @@ Use exactly {SCENES} scenes."""
         pic = ('- "character": one line describing the main cartoon characters\' look (colors, faces, clothes) so they look the same in every scene.\n'
                '- Each "image_prompt" is in English: describe the action, emotion, camera angle and background. Do NOT repeat the character line, it is added automatically.')
     prompt = prompt.replace("{PIC_RULES}", pic)
-    models = ["nvidia/nemotron-3-ultra-550b-a55b", "meta/llama-3.3-70b-instruct",
-              "nvidia/llama-3.3-nemotron-super-49b-v1", "nvidia/llama-3.1-nemotron-70b-instruct",
-              "meta/llama-3.1-70b-instruct", "nvidia/nemotron-3-super-120b"]
+    models = ["nvidia/nemotron-3-ultra-550b-a55b", "nvidia/nemotron-3.5-super-vl-120b-a12b"]   # old llama/nemotron models were retired by NVIDIA
     bad = ("guard", "safety", "embed", "reward", "vl", "parse", "retriev", "rerank", "clip", "nemoguard", "topic")
     try:
         r = requests.get(f"{base}/models", headers=hdr, timeout=30)
@@ -224,12 +224,16 @@ def llm_json(prompt, models, ok):
       denied = 0
       for model in dict.fromkeys(models):
         if denied >= 3: break
+        if model in DEAD: continue
         try:
             r = requests.post("https://integrate.api.nvidia.com/v1/chat/completions", headers=hdr, timeout=120,
-                              json={"model": model, "temperature": 0.7, "max_tokens": 2500,
+                              json={"model": model, "temperature": 0.7, "max_tokens": 8000,   # reasoning models think first, so give room
                                     "messages": [{"role": "user", "content": prompt}]})
+            if r.status_code in (404, 410):
+                DEAD.add(model)
             r.raise_for_status()
-            data = _parse_json(r.json()["choices"][0]["message"]["content"])
+            msg = r.json()["choices"][0]["message"]
+            data = _parse_json(msg.get("content") or "")
             if not ok(data):
                 raise ValueError("reply had no proper scenes")
             print(f"text made with {model} (NVIDIA key {kn})")
@@ -302,7 +306,9 @@ def make_image(prompt, path, idx):
                 if r.status_code in (401, 403):
                     print("  cloudflare token/permission problem:", r.text[:150]); SKIP.add("cf"); break
                 if r.status_code == 429:
-                    time.sleep(10); continue
+                    if n == 2:
+                        print("  cloudflare daily free limit reached -> skipping Cloudflare for this video"); SKIP.add("cf")
+                    time.sleep(5); continue
                 if r.status_code != 200:
                     print(f"  cloudflare {r.status_code} (try {n+1}/3): {r.text[:150]}"); continue
                 _save_b64(r.json()["result"]["image"], path); return
@@ -310,31 +316,40 @@ def make_image(prompt, path, idx):
                 print(f"  cloudflare error (try {n+1}/3): {str(e)[:80]}")
     for kn, key in enumerate(NVIDIA_KEYS, 1):
         if f"nv{kn}" in SKIP: continue
-        try:
-            body = {"prompt": full, "width": IMG_W, "height": IMG_H, "steps": 4, "seed": SEED}
+        for attempt in range(2):   # one quick retry for timeouts / busy server
+          try:
+            body = {"prompt": full, "width": IMG_W, "height": IMG_H, "steps": 4}   # NVIDIA does not accept "seed"
             r = requests.post("https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-schnell",
                               headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
-                              json=body, timeout=30)
+                              json=body, timeout=60)
+            if r.status_code in (401, 403):
+                print(f"  nvidia image key {kn} refused -> not using it again ({r.text[:80]})"); SKIP.add(f"nv{kn}"); break
             if r.status_code in (400, 422):
-                print("  nvidia image said:", r.text[:200])
-                body.pop("seed")
-                r = requests.post("https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-schnell",
-                                  headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
-                                  json=body, timeout=30)
+                print("  nvidia image said:", r.text[:200]); break
+            if r.status_code == 429:
+                time.sleep(8)
             r.raise_for_status()
             d = r.json()
-            _save_b64(d.get("artifacts", [{}])[0].get("base64") or d.get("image"), path); return
-        except Exception as e:
-            print(f"  nvidia image (key {kn}) failed, skipping this key from now on ({str(e)[:50]})"); SKIP.add(f"nv{kn}")
+            _save_b64(d.get("artifacts", [{}])[0].get("base64") or d.get("image"), path)
+            FAILS[f"nv{kn}"] = 0; return
+          except Exception as e:
+            FAILS[f"nv{kn}"] = FAILS.get(f"nv{kn}", 0) + 1
+            print(f"  nvidia image (key {kn}) try {attempt+1}/2 failed ({str(e)[:60]})")
+            if FAILS[f"nv{kn}"] >= 6:
+                print(f"  nvidia key {kn} keeps failing -> skipping it for this video"); SKIP.add(f"nv{kn}"); break
+            time.sleep(3)
     if 'pl' not in SKIP:
         try:
             time.sleep(6)
             url = "https://image.pollinations.ai/prompt/" + urllib.parse.quote(full)
             r = requests.get(url, params={"width": IMG_W, "height": IMG_H, "nologo": "true", "seed": SEED}, timeout=60)
             r.raise_for_status()
-            path.write_bytes(r.content); Image.open(path).verify(); return
+            path.write_bytes(r.content); Image.open(path).verify(); FAILS["pl"] = 0; return
         except Exception as e:
-            print(f"  pollinations failed, skipping it from now on ({str(e)[:50]})"); SKIP.add("pl")
+            FAILS["pl"] = FAILS.get("pl", 0) + 1
+            print(f"  pollinations failed ({str(e)[:50]})")
+            if FAILS["pl"] >= 3:
+                print("  pollinations keeps failing -> skipping it for this video"); SKIP.add("pl")
     print(f"  image {idx}: using colour placeholder")
     placeholder(path, idx)
 
