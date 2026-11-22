@@ -42,7 +42,7 @@ on:
     - cron: "37 2 * * *"    #  8:07 AM IST -> Hindi
     - cron: "37 6 * * *"    # 12:07 PM IST -> English
     - cron: "37 10 * * *"   #  4:07 PM IST -> Hindi
-    - cron: "37 13 * * *"   #  7:07 PM IST -> English
+    - cron: "15 13 * * *"   #  6:45 PM IST -> English (test time)
     - cron: "7 16 * * *"    #  9:37 PM IST -> Hindi
 
 permissions:
@@ -72,7 +72,7 @@ jobs:
           NVIDIA_KEY: ${{ secrets.NVIDIA_KEY }}
           CF_TOKEN: ${{ secrets.CF_TOKEN }}
           TOPIC: ${{ inputs.topic }}
-          VIDEO_LANG: ${{ inputs.lang || ((github.event.schedule == '37 6 * * *' || github.event.schedule == '37 13 * * *') && 'en' || 'hi') }}
+          VIDEO_LANG: ${{ inputs.lang || ((github.event.schedule == '37 6 * * *' || github.event.schedule == '15 13 * * *') && 'en' || 'hi') }}
           VOICE_GENDER: ${{ inputs.voice || vars.DAILY_VOICE || 'f' }}
           IMAGE_STYLE: ${{ inputs.style || vars.DAILY_STYLE || 'cartoon' }}
           AUTO_NICHE: ${{ vars.AUTO_NICHE }}
