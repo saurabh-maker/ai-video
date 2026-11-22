@@ -65,7 +65,7 @@ FONTS = ["/usr/share/fonts/truetype/noto/NotoSansDevanagari-Bold.ttf",
          str(Path("out") / "fonts" / "NotoSansDevanagari-Bold.ttf"),
          "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
 SKIP = set()          # image services that failed with a real problem are skipped for the rest of the video
-SEED = int(time.time()) % 1000000   # one seed for every picture of this video -> same person/look in every scene
+SEED = int(time.time()) % 1000000   # one seed for every picture of this video (NVIDIA + Pollinations; Cloudflare does not accept a seed)
 CF_TEXT_MODELS = ["@cf/meta/llama-3.3-70b-instruct-fp8-fast", "@cf/meta/llama-3.1-8b-instruct"]   # free backup for the script
 
 def run(cmd):
@@ -200,7 +200,7 @@ def make_image(prompt, path, idx):
             try:
                 r = requests.post(
                     f"https://api.cloudflare.com/client/v4/accounts/{CF_ID}/ai/run/@cf/black-forest-labs/flux-1-schnell",
-                    headers={"Authorization": f"Bearer {CF_TOKEN}"}, json={"prompt": pr, "steps": 4, "seed": SEED}, timeout=120)
+                    headers={"Authorization": f"Bearer {CF_TOKEN}"}, json={"prompt": pr, "steps": 4}, timeout=120)
                 if r.status_code in (401, 403):
                     print("  cloudflare token/permission problem:", r.text[:150]); SKIP.add("cf"); break
                 if r.status_code == 429:
@@ -210,11 +210,18 @@ def make_image(prompt, path, idx):
                 _save_b64(r.json()["result"]["image"], path); return
             except Exception as e:
                 print(f"  cloudflare error (try {n+1}/3): {str(e)[:80]}")
-    if 'nv' not in SKIP:
+    if 'nv' not in SKIP and NVIDIA_KEY:
         try:
+            body = {"prompt": full, "width": 768, "height": 1344, "steps": 4, "seed": SEED}
             r = requests.post("https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-schnell",
                               headers={"Authorization": f"Bearer {NVIDIA_KEY}", "Accept": "application/json"},
-                              json={"prompt": full, "width": 768, "height": 1344, "steps": 4, "seed": SEED}, timeout=30)
+                              json=body, timeout=30)
+            if r.status_code in (400, 422):
+                print("  nvidia image said:", r.text[:200])
+                body.pop("seed")
+                r = requests.post("https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-schnell",
+                                  headers={"Authorization": f"Bearer {NVIDIA_KEY}", "Accept": "application/json"},
+                                  json=body, timeout=30)
             r.raise_for_status()
             d = r.json()
             _save_b64(d.get("artifacts", [{}])[0].get("base64") or d.get("image"), path); return
@@ -419,16 +426,17 @@ def join_clips(clips, durs, out):
          "-c:a", "aac", "-ar", str(SR), str(out)])
     return offsets, sum(durs) - (n - 1) * TRANS
 
-# ---------- 6. BACKGROUND MUSIC (real royalty-free tracks, auto-lowered under the voice) + whoosh sound effects ----------
+# ---------- 6. BACKGROUND MUSIC (soft royalty-free tracks, auto-lowered under the voice) ----------
 # Tracks by Kevin MacLeod (incompetech.com), free under CC BY 4.0 -> put the credit line (saved in out/music_credit.txt) in your video description.
 MUSIC_BASES = ["https://incompetech.com/music/royalty-free/mp3-royaltyfree/",
                "https://aux.incompetech.com/music/royalty-free/mp3-royaltyfree/"]
-MUSIC = {   # first track that downloads is used
-    "playful":  ["Carefree.mp3", "Fluffing a Duck.mp3", "Monkeys Spinning Monkeys.mp3", "Sneaky Snitch.mp3"],
-    "calm":     ["Wallpaper.mp3", "Local Forecast - Elevator.mp3", "Dreamer.mp3", "Carefree.mp3"],
-    "dramatic": ["Investigations.mp3", "Darkest Child.mp3", "Impact Moderato.mp3", "Wallpaper.mp3"],
+SOFT = ["Wallpaper.mp3", "Dreamer.mp3", "Carefree.mp3", "Local Forecast - Elevator.mp3"]
+MUSIC = {   # soft music for every mood; first track that downloads is used
+    "playful":  ["Carefree.mp3"] + SOFT,
+    "calm":     SOFT,
+    "dramatic": ["Dreamer.mp3"] + SOFT,
 }
-MUSIC_VOL = 0.22      # music level when nobody speaks (0.15 softer, 0.30 louder)
+MUSIC_VOL = 0.18      # music level when nobody speaks (0.12 softer, 0.25 louder)
 
 def get_music(mood):
     own = Path("music.mp3")      # if you upload your own music.mp3 to Colab, it is used instead
@@ -456,21 +464,6 @@ def get_music(mood):
     return None, None
 
 
-def synth_whooshes(total, times):
-    out = np.zeros(int(total * SR))
-    rng = np.random.default_rng(3)
-    ln = int(0.7 * SR); x = np.linspace(0, 1, ln)
-    noise = rng.standard_normal(ln)
-    hp = noise - np.convolve(noise, np.ones(40) / 40, mode="same")   # keep the airy high part
-    sweep = np.sin(2*np.pi*np.cumsum(180 + 900 * x) / SR) * 0.25
-    w = (hp * 0.5 + sweep) * np.sin(np.pi * x) ** 2
-    w = w / (np.max(np.abs(w)) + 1e-9) * 0.5
-    for tm in times:
-        s = int(max(0, tm - 0.35) * SR)
-        e = min(len(out), s + ln)
-        out[s:e] += w[: e - s]
-    return out
-
 def write_wav(path, mono):
     pcm = (np.clip(mono, -1, 1) * 32767).astype(np.int16)
     st = np.repeat(pcm[:, None], 2, axis=1)
@@ -478,7 +471,7 @@ def write_wav(path, mono):
         f.setnchannels(2); f.setsampwidth(2); f.setframerate(SR); f.writeframes(st.tobytes())
 
 def add_sound(video, total, offsets, mood, final):
-    music_wav, sfx_wav = OUT / "music.wav", OUT / "sfx.wav"
+    music_wav = OUT / "music.wav"
     track, credit = get_music(mood)
     if track:   # loop to video length, soft fade in and fade out
         run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", str(track), "-t", f"{total:.2f}",
@@ -487,17 +480,15 @@ def add_sound(video, total, offsets, mood, final):
     else:
         print("no music could be downloaded, video will have voice + effects only")
         write_wav(music_wav, np.zeros(int(total * SR)))
-    write_wav(sfx_wav, synth_whooshes(total, [o + TRANS / 2 for o in offsets]))
     base = ("[0:a]asplit=2[v1][v2];"
             f"[1:a]aformat=sample_rates=44100:channel_layouts=stereo,volume={MUSIC_VOL}[m];"
             "[m][v2]sidechaincompress=threshold=0.02:ratio=12:attack=10:release=600[md];"   # music dips while the voice speaks
-            "[2:a]aformat=sample_rates=44100:channel_layouts=stereo,volume=0.7[sx];"
-            "[v1][md][sx]amix=inputs=3:duration=first:dropout_transition=0{NORM}[a]")
+            "[v1][md]amix=inputs=2:duration=first:dropout_transition=0{NORM}[a]")
     last = None
     for norm, boost in ((":normalize=0", ""), ("", ",volume=2.2")):
         try:
             fc = base.replace("{NORM}", norm).replace("[a]", f"{boost}[a]") if boost else base.replace("{NORM}", norm)
-            run(["ffmpeg", "-y", "-i", str(video), "-i", str(music_wav), "-i", str(sfx_wav),
+            run(["ffmpeg", "-y", "-i", str(video), "-i", str(music_wav),
                  "-filter_complex", fc, "-map", "0:v", "-map", "[a]",
                  "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", str(final)])
             if credit:
