@@ -144,8 +144,10 @@ $("go").addEventListener("click", async () => {
   if (!topic) { show("Type a video topic first.", "bad"); return; }
   ["token", "owner", "repo", "branch"].forEach(k => store(k, c[k]));
   $("go").disabled = true;
-  const started = Date.now() - 15000;
   try {
+    // remember the newest run BEFORE starting, so we can spot the new one (works even if the PC clock is off)
+    const before = await gh(`/actions/workflows/${WORKFLOW}/runs?per_page=1`);
+    const lastId = ((before.workflow_runs || [])[0] || {}).id || 0;
     show("Starting the video job on GitHub…");
     await gh(`/actions/workflows/${WORKFLOW}/dispatches`, {
       method: "POST",
@@ -154,10 +156,10 @@ $("go").addEventListener("click", async () => {
 
     // find the run we just started
     let run = null;
-    for (let i = 0; i < 20 && !run; i++) {
+    for (let i = 0; i < 40 && !run; i++) {
       await sleep(3000);
       const d = await gh(`/actions/workflows/${WORKFLOW}/runs?event=workflow_dispatch&per_page=5`);
-      run = (d.workflow_runs || []).find(x => new Date(x.created_at).getTime() >= started);
+      run = (d.workflow_runs || []).find(x => x.id > lastId);
     }
     if (!run) throw new Error("Job started but could not find it. Check the Actions tab on GitHub.");
 
