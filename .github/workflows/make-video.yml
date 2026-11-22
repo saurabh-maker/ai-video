@@ -4,8 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       topic:
-        description: "Video topic"
-        required: true
+        description: "Video topic (leave empty = auto topic)"
+        required: false
+        default: ""
         type: string
       lang:
         description: "Language"
@@ -25,6 +26,23 @@ on:
         default: "real"
         type: choice
         options: ["real", "cartoon"]
+      youtube:
+        description: "Upload to YouTube Shorts?"
+        required: true
+        default: "no"
+        type: choice
+        options: ["no", "yes"]
+      yt_privacy:
+        description: "YouTube privacy"
+        required: true
+        default: "private"
+        type: choice
+        options: ["private", "unlisted", "public"]
+  schedule:
+    - cron: "7 13 * * *"   # every day at 6:37 PM India time: auto topic + YouTube upload (if YouTube secrets are set)
+
+permissions:
+  contents: write   # lets the job publish the finished video as a GitHub Release (your site plays it from there)
 
 jobs:
   make-video:
@@ -50,10 +68,25 @@ jobs:
           NVIDIA_KEY: ${{ secrets.NVIDIA_KEY }}
           CF_TOKEN: ${{ secrets.CF_TOKEN }}
           TOPIC: ${{ inputs.topic }}
-          VIDEO_LANG: ${{ inputs.lang }}
-          VOICE_GENDER: ${{ inputs.voice }}
-          IMAGE_STYLE: ${{ inputs.style }}
+          VIDEO_LANG: ${{ inputs.lang || vars.DAILY_LANG || 'hi' }}
+          VOICE_GENDER: ${{ inputs.voice || vars.DAILY_VOICE || 'f' }}
+          IMAGE_STYLE: ${{ inputs.style || vars.DAILY_STYLE || 'real' }}
+          AUTO_NICHE: ${{ vars.AUTO_NICHE }}
+          YT_UPLOAD: ${{ inputs.youtube || 'yes' }}
+          YT_PRIVACY: ${{ inputs.yt_privacy || vars.DAILY_PRIVACY || 'private' }}
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: python pipeline.py
+
+      - name: Publish video to your site (GitHub Release)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "video-${{ github.run_id }}" out/final.mp4 \
+            --title "$(cat out/title.txt)" \
+            --notes-file out/release_notes.txt
 
       - name: Upload video
         if: always()
