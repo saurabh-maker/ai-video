@@ -102,21 +102,25 @@ def run(cmd):
 def write_script():
     base = "https://integrate.api.nvidia.com/v1"
     hdr = {"Authorization": f"Bearer {NVIDIA_KEY}"}
-    language = "Hindi (Devanagari script)" if LANG == "hi" else "simple English"
+    language = "Hindi (Devanagari script), simple everyday spoken Hindi - not formal or shuddh Hindi" if LANG == "hi" else "simple English"
     prompt = f"""You are a top short-video storyteller. Write a 60 second vertical video script about: "{TOPIC}".
 Narration language: {language}.
 RULES for narration:
 - Scene 1 is a strong HOOK (a surprising question or bold line), not an introduction.
-- Talk like a friend, not a textbook. Short, punchy sentences. Each scene 14-17 words (total about 150-160 words, so the video is about 60 seconds).
+- Short, punchy sentences. Each scene 14-17 words (total about 150-160 words, so the video is about 60 seconds).
+- Sound like a real Indian kids' YouTuber talking to a 4-7 year old, NOT like an AI or a textbook: warm, excited, everyday spoken words kids hear at home (in Hindi, common English words like colour, ball, school, bus are fine).
+- Vary every sentence: different openings, mix in questions ("बताओ तो...?" / "Can you guess...?"), sounds ("दहाड़! रोओओर!" / "Moo!"), tiny actions ("ताली बजाओ!" / "Clap with me!"), counting and one small surprise. Never start two scenes the same way.
+- No filler or repeated praise: words like प्यारा/प्यारी, चमकीला, मज़ेदार, कितना, देखो (or cute, amazing, look) may appear at most ONCE in the whole script.
 - Build a mini story: setup, tension or fun conflict, twist, takeaway.
 - Last scene: one clear takeaway plus a call to action (follow / share / comment).
 - If the topic is funny, be playful and use light humor. If it is informational, be clear and accurate with NO made-up statistics.
 - Stay 100% on the topic. Every scene must be about the topic and nothing else.
 - If the topic is a LEARNING LIST (letters, numbers, colors, shapes, animals, fruits, Hindi varnamala, etc.):
+  stick to ONE subject only (only colours, or only animals...) - never mix colours, shapes and animals in one video;
   cover exactly the items/range named in the topic, IN ORDER, one item per scene (two items per scene only if there are more items than scenes);
   scene 1 can be a very short hook that already starts the list, the last scene is a quick recap + call to action;
   the narration says the item clearly and simply (e.g. "A for Apple! A... A... Apple!");
-  the image_prompt shows ONLY that one item, big and centered on a simple plain background (no other objects, no letters);
+  the image_prompt shows EXACTLY what that scene's narration names (red colour -> a big red apple or red ball, not a random shape), big and clear in a simple bright kid-friendly setting (no letters);
   "character" must be an empty string "".
 RULES for pictures:
 {{PIC_RULES}}
@@ -167,7 +171,7 @@ GENRE_RULES = {
 }
 
 def write_long_script(models, pic):
-    language = "Hindi (Devanagari script)" if LANG == "hi" else "simple English"
+    language = "Hindi (Devanagari script), simple everyday spoken Hindi - not formal or shuddh Hindi" if LANG == "hi" else "simple English"
     chapters = max(3, round(SCENES / 9))
     per = [SCENES // chapters + (1 if i < SCENES % chapters else 0) for i in range(chapters)]
     seed_hint = ""
@@ -198,7 +202,10 @@ Full outline: {json.dumps(outline, ensure_ascii=False)}
 This chapter: {ch.get("name","")} - {ch.get("summary","")}
 Story so far ends with: "{recent or '(this is the beginning)'}"
 Write exactly {k} scenes that continue smoothly from the story so far.
-Narration language: {language}. Each scene 14-17 words, like a storyteller talking to kids: simple, vivid, with feelings.
+Narration language: {language}. Each scene 14-17 words, like a grandparent telling a bedtime story: simple, vivid, with feelings, some dialogue between characters and sound words.
+- Sound like a real Indian kids' YouTuber talking to a 4-7 year old, NOT like an AI or a textbook: warm, excited, everyday spoken words kids hear at home (in Hindi, common English words like colour, ball, school, bus are fine).
+- Vary every sentence: different openings, mix in questions ("बताओ तो...?" / "Can you guess...?"), sounds ("दहाड़! रोओओर!" / "Moo!"), tiny actions ("ताली बजाओ!" / "Clap with me!"), counting and one small surprise. Never start two scenes the same way.
+- No filler or repeated praise: words like प्यारा/प्यारी, चमकीला, मज़ेदार, कितना, देखो (or cute, amazing, look) may appear at most ONCE in the whole script.
 {"The last scene must end the story and say the lesson clearly, then ask kids to like and subscribe." if ci == chapters - 1 else "Do not end the story yet."}
 RULES for pictures:
 {pic}
@@ -276,6 +283,7 @@ def auto_topic():
     done = previous_titles()
     prompt = f"""Suggest ONE fresh, catchy topic for a 60 second YouTube Short in this niche: {AUTO_NICHE}.
 It must be evergreen and positive, about ordinary people (no real famous people, no news, no politics, no religion).
+It must be about ONE single subject (e.g. only fruits, only animal sounds, only numbers 1-10, or one small story) - never combine colours, shapes and animals in one video.
 Write the topic in {lang}, max 12 words.
 Do NOT repeat any of these earlier topics: {json.dumps(done[:40], ensure_ascii=False)}
 Return ONLY valid JSON: {{"topic": "..."}}"""
