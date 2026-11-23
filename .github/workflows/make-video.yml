@@ -55,13 +55,13 @@ on:
         required: false
         default: "3"
         type: string
-  schedule:   # 6 auto videos a day (5 Shorts + 1 long story) (India time). GitHub cron is UTC; may start a few minutes late.
-    - cron: "37 2 * * *"    #  8:07 AM IST -> Hindi
-    - cron: "37 6 * * *"    # 12:07 PM IST -> English
-    - cron: "37 10 * * *"   #  4:07 PM IST -> Hindi
-    - cron: "37 12 * * *"   #  6:07 PM IST -> LONG Hindi story (3 min, story type rotates moral/horror/real)
-    - cron: "37 13 * * *"   #  7:07 PM IST -> English
-    - cron: "7 16 * * *"    #  9:37 PM IST -> Hindi
+      series:
+        description: "Series (none = use the options above)"
+        required: false
+        default: "none"
+        type: choice
+        options: ["none", "abc", "colours", "kyun", "aadat", "golu", "bedtime", "jaanwar", "mix12"]
+  # Timing is done by cron-job.org (GitHub's own schedule was hours late for this new repo).
 
 permissions:
   contents: write   # lets the job publish the finished video as a GitHub Release (your site plays it from there)
@@ -89,6 +89,8 @@ jobs:
         env:
           NVIDIA_KEY: ${{ secrets.NVIDIA_KEY }}
           NVIDIA_KEY_2: ${{ secrets.NVIDIA_KEY_2 }}
+          FREESOUND_KEY: ${{ secrets.FREESOUND_KEY }}
+          SERIES: ${{ inputs.series != 'none' && inputs.series || '' }}
           CF_TOKEN: ${{ secrets.CF_TOKEN }}
           TOPIC: ${{ inputs.topic }}
           VIDEO_LANG: ${{ inputs.lang || ((github.event.schedule == '37 6 * * *' || github.event.schedule == '37 13 * * *') && 'en' || 'hi') }}
