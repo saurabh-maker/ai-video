@@ -93,6 +93,21 @@
       </div>
     </div>
 
+    <div>
+      <label>Series (overrides language / style above)</label>
+      <select id="series">
+        <option value="none">None — use the options above</option>
+        <option value="abc">ABC</option>
+        <option value="colours">Colours</option>
+        <option value="kyun">Kyun?</option>
+        <option value="aadat">Achhi Aadat</option>
+        <option value="golu">Golu</option>
+        <option value="bedtime">Bedtime story</option>
+        <option value="jaanwar">Jaanwar ki awaaz</option>
+        <option value="mix12">Mix (12 PM)</option>
+      </select>
+    </div>
+
     <div id="pwBox" class="hidden">
       <label>Password</label>
       <input id="password" type="password" placeholder="ask the site owner">
@@ -224,7 +239,7 @@ $("go").addEventListener("click", async () => {
     const lastId = ((before.workflow_runs || [])[0] || {}).id || 0;
     show(topic ? "Starting the video job…" : "Starting the video job with an auto topic…");
     await api.make({ topic, lang: choice.lang, voice: choice.voice, style: choice.style,
-                     youtube: choice.youtube, yt_privacy: $("yt_privacy").value });
+                     youtube: choice.youtube, yt_privacy: $("yt_privacy").value, series: $("series").value });
 
     let run = null;
     for (let i = 0; i < 40 && !run; i++) {
