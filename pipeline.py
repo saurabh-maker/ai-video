@@ -35,30 +35,78 @@ def ask(env, question, default=""):
         return v or default
     return input(question)
 
-TOPIC = ask("TOPIC", "Video topic (leave empty = auto topic): ").strip()
+# ---------- SERIES (fully automatic channel plan: each daily slot runs one series, the next episode is found by itself) ----------
+GOLU = ("Golu, a small cute cartoon monkey with light brown fur, big round shiny eyes, a red cap and a yellow t-shirt, "
+        "same look in every picture")
+SERIES_DEFS = {
+    "abc":     dict(name="ABC with Golu", lang="en", fmt="short", style="cartoon", character=GOLU,
+                    items=[chr(c) for c in range(65, 91)], overlay="{item}{low}",
+                    brief="Teach the letter {item} to small kids: say the letter and its sound, then 3-4 simple words starting with {item} "
+                          "(one word per scene, e.g. '{item} for ...'), Golu shows each object. End with a quick recap of all the words."),
+    "colours": dict(name="Colours & Shapes", lang="en", fmt="short", style="cartoon", character=GOLU,
+                    items=["Red", "Blue", "Yellow", "Green", "Orange", "Purple", "Pink", "Brown", "Black", "White",
+                           "Circle", "Square", "Triangle", "Star", "Heart", "Rectangle", "Oval", "Diamond"], overlay="{item}",
+                    brief="Teach small kids the {kind} '{item}': name it clearly and show 4-5 everyday things that are {item} "
+                          "(one thing per scene). End with a quick recap."),
+    "kyun":    dict(name="Kyun Aur Kaise?", lang="hi", fmt="short", style="cartoon", character="",
+                    niche="one curious 'why' or 'how' question kids ask (e.g. why is the sky blue, why do we sleep, how do birds fly), "
+                          "answered simply and correctly for a 5-8 year old"),
+    "aadat":   dict(name="Achhi Aadatein", lang="hi", fmt="short", style="cartoon", character=GOLU,
+                    niche="one good habit for small kids (e.g. brushing teeth, washing hands, sharing toys, saying sorry, sleeping on time), "
+                          "shown through a tiny story where Golu learns it"),
+    "golu":    dict(name="Golu Ki Kahaniyan", lang="hi", fmt="long", style="cartoon", character=GOLU, genre="moral", minutes=3,
+                    niche="an original moral story where Golu the monkey learns a lesson"),
+    "bedtime": dict(name="Bedtime Story", lang="hi", fmt="short", style="cartoon", character="", rate="-12%", mood="calm",
+                    niche="one calm, gentle bedtime story for small kids (moon, stars, sleepy animals, kind friends) that ends with everyone falling asleep"),
+    "jaanwar": dict(name="Jaanwar Ki Awaaz", lang="hi", fmt="short", style="cartoon", character="", sfx=True,
+                    items=["cow", "dog", "cat", "lion", "elephant", "horse", "goat", "sheep", "duck", "rooster", "frog", "owl",
+                           "monkey", "pig", "donkey", "crow", "parrot", "wolf", "bee", "cuckoo"],
+                    brief="Teach small kids about the {item}: what it looks like, where it lives, what it eats and ONE fun fact. "
+                          "Two scenes must play its REAL sound: add \"sfx\": \"{item} sound\" to scene 2 and to the last scene, "
+                          "and in those scenes say 'Suno!' (listen) - never imitate the sound with words."),
+}
+_ser = ask("SERIES", "Series - abc, colours, kyun, aadat, golu, bedtime, jaanwar, mix12 or none [none]: ", "").strip().lower()
+if _ser == "mix12":   # 12 PM slot: animal sounds and why-questions on alternate days
+    _ser = ["jaanwar", "kyun"][time.gmtime().tm_yday % 2]
+if _ser == "jaanwar" and not (os.environ.get("FREESOUND_KEY", "").strip() or os.environ.get("GITHUB_ACTIONS") is None):
+    print("no FREESOUND_KEY -> real animal sounds not possible, making 'Kyun Aur Kaise?' instead")
+    _ser = "kyun"
+SERIES = SERIES_DEFS.get(_ser)
+SERIES_KEY = _ser if SERIES else ""
+if SERIES:            # the series decides language, format and style (these override the form values)
+    os.environ["VIDEO_LANG"] = SERIES["lang"]
+    os.environ["IMAGE_STYLE"] = SERIES["style"]
+    os.environ["VIDEO_FORMAT"] = SERIES["fmt"]
+    if SERIES["fmt"] == "long":
+        os.environ["STORY_GENRE"] = SERIES.get("genre", "moral")
+        os.environ["LONG_MINUTES"] = str(SERIES.get("minutes", 3))
+    print(f"series: {SERIES['name']}")
+    TOPIC = ""
+else:
+    TOPIC = ask("TOPIC", "Video topic (leave empty = auto topic): ").strip()
 AUTO_NICHE = os.environ.get("AUTO_NICHE", "").strip() or (
     "learning videos for kids aged 2-8: alphabet ABC in small parts, numbers, colors, shapes, animals and their sounds, "
     "fruits, vegetables, good habits, and short moral stories with cute animal characters"
     + (", Hindi varnamala (swar and vyanjan)" if os.environ.get("VIDEO_LANG", "").lower().startswith("h") else ""))
 CHANNEL_NAME = os.environ.get("CHANNEL_NAME", "").strip() or "Kidzivora"   # shown as a © watermark on every video
-_lang = ask("VIDEO_LANG", "Language - en or hi (hindi) [en]: ", "hi")
+_lang = os.environ["VIDEO_LANG"] if SERIES else ask("VIDEO_LANG", "Language - en or hi (hindi) [en]: ", "hi")
 LANG = "hi" if _lang.strip().lower().startswith("h") else "en"
 _voice = ask("VOICE_GENDER", "Voice - m (male) or f (female) [f]: ", "f")
 VOICE_GENDER = "m" if _voice.strip().lower().startswith("m") else "f"
-_style = ask("IMAGE_STYLE", "Picture style - real (realistic humans) or cartoon [real]: ", "real")
+_style = os.environ["IMAGE_STYLE"] if SERIES else ask("IMAGE_STYLE", "Picture style - real (realistic humans) or cartoon [real]: ", "real")
 IMAGE_STYLE = "cartoon" if _style.strip().lower().startswith("c") else "real"
-_fmt = ask("VIDEO_FORMAT", "Video type - short (9:16, about 60 sec) or long (16:9 story video) [short]: ", "short")
+_fmt = os.environ["VIDEO_FORMAT"] if SERIES else ask("VIDEO_FORMAT", "Video type - short (9:16, about 60 sec) or long (16:9 story video) [short]: ", "short")
 LONG = _fmt.strip().lower().startswith("l")
 STORY_GENRE, LONG_MINUTES = "moral", 5
 if LONG:
-    _g = ask("STORY_GENRE", "Story type - moral (kids learn a lesson), horror (kid-safe spooky), real (true story) or auto [moral]: ", "auto").strip().lower()
+    _g = os.environ["STORY_GENRE"] if SERIES else ask("STORY_GENRE", "Story type - moral (kids learn a lesson), horror (kid-safe spooky), real (true story) or auto [moral]: ", "auto").strip().lower()
     if _g.startswith("a"):   # auto (daily long video): moral -> horror -> real, changing every day
         _g = ["moral", "horror", "real"][time.gmtime().tm_yday % 3]
     STORY_GENRE = "horror" if _g.startswith("h") else ("real" if _g.startswith("r") else "moral")
     if STORY_GENRE == "real" and IMAGE_STYLE == "real":
         IMAGE_STYLE = "cartoon"   # real people are shown as illustrations, never as fake photos
     try:
-        LONG_MINUTES = max(2, min(10, int(ask("LONG_MINUTES", "Length in minutes (2-10) [5]: ", "5").strip() or "5")))
+        LONG_MINUTES = max(2, min(10, int((os.environ["LONG_MINUTES"] if SERIES else ask("LONG_MINUTES", "Length in minutes (2-10) [5]: ", "5")).strip() or "5")))
     except ValueError:
         LONG_MINUTES = 5
 
@@ -66,12 +114,23 @@ if LONG:
 SCENES = LONG_MINUTES * 9 if LONG else 10   # ~15 words per scene: 10 scenes = about 60 seconds, 9 scenes per minute for long stories
 W, H, FPS = (1920, 1080, 25) if LONG else (1080, 1920, 25)
 IMG_W, IMG_H = (1344, 768) if LONG else (768, 1344)
-TRANS = 0.35          # seconds of cross-transition between scenes (also the voice lead-in)
+TRANS = 0.36          # seconds of cross-transition between scenes (also the voice lead-in); 0.36 s = exactly 9 frames, keeps picture and voice in sync
 SR = 44100
 OUT = Path("out"); OUT.mkdir(exist_ok=True)
 VOICES = {("en","f"): "en-IN-NeerjaNeural", ("en","m"): "en-IN-PrabhatNeural",
           ("hi","f"): "hi-IN-SwaraNeural",   ("hi","m"): "hi-IN-MadhurNeural"}
-VOICE_RATE = "+6%"    # "+0%" slower, "+12%" faster
+VOICE_RATE = (SERIES or {}).get("rate", "+6%")    # "+0%" slower, "+12%" faster (bedtime stories use a slower voice)
+FREESOUND_KEY = os.environ.get("FREESOUND_KEY", "").strip()
+if not FREESOUND_KEY and not os.environ.get("GITHUB_ACTIONS"):
+    try:
+        from google.colab import userdata
+        FREESOUND_KEY = (userdata.get("FREESOUND_KEY") or "").strip()
+    except Exception:
+        pass
+OVERLAY_TEXT = ""     # big on-screen text drawn by the code (letter / colour name), set per episode
+if SERIES_KEY == "jaanwar" and not FREESOUND_KEY:   # no sound library -> never say "Suno!" without a real sound
+    print("no FREESOUND_KEY -> real animal sounds not possible, making 'Kyun Aur Kaise?' instead")
+    SERIES_KEY, SERIES = "kyun", SERIES_DEFS["kyun"]
 STYLES = {
     "real": ("photorealistic cinematic photograph, shot on 35mm lens, natural soft lighting, shallow depth of field, "
              "realistic skin texture and faces, true-to-life colors, high detail, sharp focus, vertical composition, "
@@ -127,8 +186,8 @@ RULES for pictures:
 - Use gentle words only (arguing, competing, surprised). Never use fight, battle, kill, blood, weapon.
 - No text, letters or logos inside the pictures.
 - "mood" is the background music style: exactly one of playful, calm, dramatic.
-Return ONLY valid JSON, no markdown:
-{{"title": "...", "mood": "playful", "character": "...", "scenes": [{{"narration": "...", "image_prompt": "..."}}]}}
+{{SERIES_LINE}}{{SFX_RULE}}Return ONLY valid JSON, no markdown:
+{{"title": "...", "mood": "playful", "character": "...", "scenes": [{{"narration": "...", "image_prompt": "..."{{SFX_FIELD}}}}]}}
 Use exactly {SCENES} scenes."""
     if IMAGE_STYLE == "real":
         pic = ('- "character": one line describing the main real-looking people (age, gender, skin tone, hair, face, clothes) so they look the same in every scene.\n'
@@ -137,6 +196,7 @@ Use exactly {SCENES} scenes."""
         pic = ('- "character": one line describing the main cartoon characters\' look (colors, faces, clothes) so they look the same in every scene.\n'
                '- Each "image_prompt" is in English: describe the action, emotion, camera angle and background. Do NOT repeat the character line, it is added automatically.')
     prompt = prompt.replace("{PIC_RULES}", pic)
+    prompt = prompt.replace("{SERIES_LINE}", series_line()).replace("{SFX_RULE}", sfx_rule()).replace("{SFX_FIELD}", ', "sfx": ""' if FREESOUND_KEY else "")
     models = ["nvidia/nemotron-3-ultra-550b-a55b", "nvidia/nemotron-3.5-super-vl-120b-a12b"]   # old llama/nemotron models were retired by NVIDIA
     bad = ("guard", "safety", "embed", "reward", "vl", "parse", "retriev", "rerank", "clip", "nemoguard", "topic")
     try:
@@ -179,6 +239,7 @@ def write_long_script(models, pic):
         seed_hint = (f"For uniqueness, use these ingredients (change them only if they clash with the topic): "
                      f"setting {random.choice(SETTINGS)}, main hero {random.choice(HEROES)}, value {random.choice(VALUES)}.")
     outline_prompt = f"""You are a top kids' story writer. Plan a {LONG_MINUTES}-minute YouTube story video.
+{series_line()}
 Topic / idea: "{TOPIC}"
 Story type: {GENRE_RULES[STORY_GENRE]}
 {seed_hint}
@@ -196,6 +257,7 @@ Use exactly {chapters} chapters."""
     for ci, ch in enumerate(outline["chapters"][:chapters]):
         k = per[ci] if ci < len(per) else 9
         recent = " ".join(s["narration"] for s in scenes[-3:])
+        sfx_field = ', "sfx": ""' if FREESOUND_KEY else ""
         chap_prompt = f"""You are writing chapter {ci+1} of {chapters} of this kids' story video.
 Story type: {GENRE_RULES[STORY_GENRE]}
 Full outline: {json.dumps(outline, ensure_ascii=False)}
@@ -211,11 +273,24 @@ RULES for pictures:
 {pic}
 - Use gentle words only. Never use fight, battle, kill, blood, weapon.
 - No text, letters or logos inside the pictures.
-Return ONLY valid JSON, no markdown: {{"scenes": [{{"narration": "...", "image_prompt": "..."}}]}}"""
+{sfx_rule()}Return ONLY valid JSON, no markdown: {{"scenes": [{{"narration": "...", "image_prompt": "..."{sfx_field}}}]}}"""
         part = llm_json(chap_prompt, models, lambda d: d.get("scenes") and "narration" in d["scenes"][0] and "image_prompt" in d["scenes"][0])
         scenes += part["scenes"][:k]
         print(f"  chapter {ci+1}/{chapters}: {len(part['scenes'][:k])} scenes")
     return {"title": outline["title"], "mood": outline.get("mood", "calm"), "character": outline.get("character", ""), "scenes": scenes}
+
+def series_line():
+    if not SERIES: return ""
+    s = f"This is episode {EP} of the kids' series \"{SERIES['name']}\" on the channel {CHANNEL_NAME}. The title should be short and searchable.\n"
+    if SERIES.get("character"):
+        s += f"The main character in every picture is {SERIES['character']}. Do not invent other main characters.\n"
+    return s
+
+def sfx_rule():
+    if not FREESOUND_KEY: return ""
+    return ('- Optional "sfx": a REAL sound effect to play right after that scene\'s narration, as 2-3 English search words '
+            '(e.g. "cow moo", "door creak", "birds chirping", "rain"). Leave it "" in most scenes; use at most 3 in the whole video '
+            'unless the series says otherwise. Never write the sound as words in the narration.\n')
 
 def _parse_json(text):
     if isinstance(text, dict):
@@ -271,21 +346,55 @@ def llm_json(prompt, models, ok):
 def previous_titles():
     repo, tok = os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GH_TOKEN")
     if not repo: return []
-    try:
-        h = {"Authorization": f"Bearer {tok}"} if tok else {}
-        r = requests.get(f"https://api.github.com/repos/{repo}/releases?per_page=60", headers=h, timeout=30)
-        return [x.get("name", "") for x in r.json() if x.get("tag_name", "").startswith("video-")]
-    except Exception:
-        return []
+    h = {"Authorization": f"Bearer {tok}"} if tok else {}
+    names = []
+    for page in range(1, 21):   # read the whole history (up to 2,000 videos), newest first
+        try:
+            r = requests.get(f"https://api.github.com/repos/{repo}/releases?per_page=100&page={page}", headers=h, timeout=30)
+            rows = r.json()
+        except Exception:
+            break
+        if not isinstance(rows, list) or not rows:
+            break
+        names += [x.get("name", "") for x in rows if x.get("tag_name", "").startswith("video-")]
+        if len(rows) < 100:
+            break
+    return names
 
-def auto_topic():
+EP = 0   # episode number of the current series (0 = not a series video)
+
+def setup_series():
+    # finds the next episode from earlier videos (GitHub Releases titles look like "... | ABC with Golu #6")
+    global EP, TOPIC, OVERLAY_TEXT
+    done = [t for t in previous_titles() if SERIES["name"] in t]
+    pairs = [(t, int(m.group(1))) for t in done for m in [re.search(r"#(\d+)", t.split(SERIES["name"])[-1])] if m]
+    done, nums = [p[0] for p in pairs] or done, [p[1] for p in pairs]
+    EP = (max(nums) + 1) if nums else 1
+    if SERIES.get("items"):          # fixed order: A, B, C ... / Red, Blue ... / cow, dog ...
+        items = SERIES["items"]
+        item = items[(EP - 1) % len(items)]
+        kind = "shape" if SERIES_KEY == "colours" and items.index(item) >= 10 else "colour"
+        TOPIC = SERIES["brief"].format(item=item, low=item.lower(), kind=kind)
+        rnd = (EP - 1) // len(items) + 1
+        if rnd > 1:   # the list starts again: ask for new words / examples / facts, and show what was used before
+            same = [t for t, n in zip(done, nums) if (n - 1) % len(items) == (EP - 1) % len(items)]
+            TOPIC += (f" This is round {rnd} of the series: use completely DIFFERENT words, examples and facts than earlier rounds"
+                      f" (earlier videos for {item}: {json.dumps(same[:10], ensure_ascii=False)}).")
+        if SERIES.get("overlay"):
+            OVERLAY_TEXT = SERIES["overlay"].format(item=item, low=item.lower() if SERIES_KEY == "abc" else "")
+    else:                            # open series: the AI picks a new idea that was not done before
+        TOPIC = auto_topic(SERIES["niche"], done)
+    print(f"{SERIES['name']} - episode {EP}: {TOPIC[:90]}")
+
+def auto_topic(niche=None, done=None):
     lang = "Hindi written in English letters (Hinglish)" if LANG == "hi" else "English"
-    done = previous_titles()
-    prompt = f"""Suggest ONE fresh, catchy topic for a 60 second YouTube Short in this niche: {AUTO_NICHE}.
+    niche = niche or AUTO_NICHE
+    done = previous_titles() if done is None else done
+    prompt = f"""Suggest ONE fresh, catchy topic for a 60 second YouTube Short in this niche: {niche}.
 It must be evergreen and positive, about ordinary people (no real famous people, no news, no politics, no religion).
 It must be about ONE single subject (e.g. only fruits, only animal sounds, only numbers 1-10, or one small story) - never combine colours, shapes and animals in one video.
 Write the topic in {lang}, max 12 words.
-Do NOT repeat any of these earlier topics: {json.dumps(done[:40], ensure_ascii=False)}
+Do NOT repeat (or closely copy) any of these earlier topics: {json.dumps(done[:150], ensure_ascii=False)}
 Return ONLY valid JSON: {{"topic": "..."}}"""
     data = llm_json(prompt, ["nvidia/nemotron-3.5-lightning-30b-a3b", "nvidia/nemotron-3-ultra-550b-a55b"],
                     lambda d: bool(str(d.get("topic", "")).strip()))
@@ -514,18 +623,17 @@ MOTIONS = [  # gentle camera moves (small zoom so characters near the edges are 
     "z='1+0.09*on/{F}':x='(iw-iw/zoom)/2':y='(ih-ih/zoom)*0.25'",       # zoom toward top
 ]
 
-def scene_clip(sc, audio, out, idx):
+def scene_clip(sc, audio, out, idx, extra=0.0):
+    # picture only (the voice is placed later on one exact timeline, so it can never drift from the pictures)
     al = audio_len(audio)
-    dur = TRANS + al + TRANS          # voice starts after the transition and ends before the next one
-    F = int(dur * FPS)
+    F = int(math.ceil((TRANS + al + extra + TRANS) * FPS))   # voice (+ sound effect) starts after the transition and ends before the next one
+    dur = F / FPS                                    # whole frames only -> exact timing
     k = 2 if sc["fw"] == W and sc["fh"] == W else 1.5
     motion = MOTIONS[idx % len(MOTIONS)].replace("{F}", str(F))
     inputs = ["-loop", "1", "-framerate", str(FPS), "-i", str(sc["bg"]),
               "-loop", "1", "-framerate", str(FPS), "-i", str(sc["fg"])]
     for cp, _, _ in sc["caps"]:
         inputs += ["-loop", "1", "-framerate", str(FPS), "-i", str(cp)]
-    inputs += ["-i", str(audio)]
-    a_idx = 2 + len(sc["caps"])
     fg_chain = (f"[1:v]scale={int(sc['fw']*k)}:{int(sc['fh']*k)},"
                 f"zoompan={motion}:d={F}:s={sc['fw']}x{sc['fh']}:fps={FPS}[fg];"
                 f"[0:v][fg]overlay={sc.get('fx', 0)}:{sc['fy']}:shortest=1[b0];")
@@ -533,11 +641,9 @@ def scene_clip(sc, audio, out, idx):
     for j, (_, t0, t1) in enumerate(sc["caps"]):
         chain += f"[{prev}][{2+j}:v]overlay=0:0:enable='between(t,{t0:.2f},{t1:.2f})'[b{j+1}];"
         prev = f"b{j+1}"
-    fc = fg_chain + chain + f"[{prev}]setsar=1,format=yuv420p[v];" \
-         f"[{a_idx}:a]adelay={int(TRANS*1000)}|{int(TRANS*1000)},apad,aformat=sample_rates={SR}:channel_layouts=stereo[a]"
-    run(["ffmpeg", "-y", *inputs, "-filter_complex", fc, "-map", "[v]", "-map", "[a]", "-t", f"{dur:.3f}",
-         "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-         "-c:a", "aac", "-ar", str(SR), "-ac", "2", str(out)])
+    fc = fg_chain + chain + f"[{prev}]setsar=1,format=yuv420p[v]"
+    run(["ffmpeg", "-y", *inputs, "-filter_complex", fc, "-map", "[v]", "-frames:v", str(F),
+         "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", str(out)])
     return dur
 
 # ---------- 5. CINEMATIC JOIN: transitions + colour grade + vignette + film grain + © watermark ----------
@@ -548,6 +654,10 @@ def watermark_png(dst):
     font = get_font(44, text)
     tw = d.textlength(text, font=font)
     d.text((W - tw - 40, 60), text, font=font, fill=(255, 255, 255, 190), stroke_width=3, stroke_fill=(0, 0, 0, 140))
+    if OVERLAY_TEXT:   # big letter / colour name at the top, drawn by the code so it is always spelled right
+        big = get_font(170 if len(OVERLAY_TEXT) <= 3 else 120, OVERLAY_TEXT)
+        bw = d.textlength(OVERLAY_TEXT, font=big)
+        d.text(((W - bw) / 2, 140), OVERLAY_TEXT, font=big, fill=(255, 224, 40, 255), stroke_width=12, stroke_fill=(0, 0, 0, 255))
     layer.save(dst)
 
 def join_clips(clips, durs, out):
@@ -555,38 +665,68 @@ def join_clips(clips, durs, out):
     names = ["fade", "smoothleft", "fade", "smoothright"]
     inputs = []
     for c in clips: inputs += ["-i", str(c)]
-    fc, vprev, aprev, offsets, acc = "", "0:v", "0:a", [], 0.0
+    fc, vprev, starts, acc = "", "0:v", [0.0], 0.0   # starts = when each scene begins in the joined video
     for i in range(1, n):
         acc += durs[i-1]
         off = acc - i * TRANS
-        offsets.append(off)
+        starts.append(off)
         tr = names[(i-1) % len(names)]
-        fc += f"[{vprev}][{i}:v]xfade=transition={tr}:duration={TRANS}:offset={off:.3f}[xv{i}];"
-        fc += f"[{aprev}][{i}:a]acrossfade=d={TRANS}[xa{i}];"
-        vprev, aprev = f"xv{i}", f"xa{i}"
+        fc += f"[{vprev}][{i}:v]xfade=transition={tr}:duration={TRANS}:offset={off:.4f}[xv{i}];"
+        vprev = f"xv{i}"
     grade = "eq=contrast=1.07:saturation=1.12,vignette=PI/4.5,noise=alls=3:allf=t"
     wm = OUT / "watermark.png"; watermark_png(wm)
     inputs += ["-loop", "1", "-framerate", str(FPS), "-i", str(wm)]
     fc += f"[{vprev}]{grade}[g];[g][{n}:v]overlay=0:0:shortest=1,format=yuv420p[vout]"
-    run(["ffmpeg", "-y", *inputs, "-filter_complex", fc, "-map", "[vout]", "-map", f"[{aprev}]",
-         "-c:v", "libx264", "-preset", "veryfast", "-crf", "25", "-maxrate", "6M", "-bufsize", "12M",
-         "-c:a", "aac", "-ar", str(SR), str(out)])
-    return offsets, sum(durs) - (n - 1) * TRANS
+    run(["ffmpeg", "-y", *inputs, "-filter_complex", fc, "-map", "[vout]",
+         "-c:v", "libx264", "-preset", "veryfast", "-crf", "25", "-maxrate", "6M", "-bufsize", "12M", str(out)])
+    return starts, sum(durs) - (n - 1) * TRANS
 
 def join_many(clips, durs, out, size=10):
     # long videos: join 10 scenes at a time (keeps ffmpeg memory low), then glue the parts together
     if len(clips) <= size + 2:
         return join_clips(clips, durs, out)
-    parts, total = [], 0.0
+    parts, total, starts = [], 0.0, []
     for i in range(0, len(clips), size):
         pp = OUT / f"part{i // size}.mp4"
-        _, t = join_clips(clips[i:i + size], durs[i:i + size], pp)
+        st, t = join_clips(clips[i:i + size], durs[i:i + size], pp)
+        starts += [total + x for x in st]
         parts.append(pp); total += t
         print(f"  joined part {i // size + 1}/{(len(clips) + size - 1) // size}")
     lst = OUT / "parts.txt"
     lst.write_text("".join(f"file '{p.resolve()}'\n" for p in parts), encoding="utf-8")
     run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(out)])
-    return [], total
+    return starts, total
+
+# ---------- 5b. REAL SOUND EFFECTS (Freesound, Creative Commons 0 only = free to use, no credit needed) ----------
+SFX_CACHE = {}
+
+def get_sfx(query):
+    # returns (path, seconds) of a short real sound, or (None, 0)
+    q = (query or "").strip()
+    if not q or not FREESOUND_KEY: return None, 0
+    if q in SFX_CACHE: return SFX_CACHE[q]
+    res = (None, 0)
+    params = {"query": q, "token": FREESOUND_KEY, "sort": "rating_desc", "page_size": 8,
+              "filter": 'license:"Creative Commons 0" duration:[0.6 TO 6]', "fields": "id,name,previews,license,duration"}
+    for url in ("https://freesound.org/apiv2/search/text/", "https://freesound.org/apiv2/search/"):
+        try:
+            r = requests.get(url, params=params, timeout=30)
+            if r.status_code != 200: continue
+            for hit in r.json().get("results", []):
+                prev = (hit.get("previews") or {}).get("preview-hq-mp3")
+                if not prev: continue
+                dst = OUT / f"sfx_{hit['id']}.mp3"
+                a = requests.get(prev, timeout=60)
+                if a.status_code != 200 or len(a.content) < 2000: continue
+                dst.write_bytes(a.content)
+                res = (dst, min(audio_len(dst), 6.0))
+                print(f"  sound effect: {q} -> {hit.get('name', '')[:40]}")
+                break
+            if res[0]: break
+        except Exception as e:
+            print(f"  sound effect {q} failed ({str(e)[:60]})")
+    SFX_CACHE[q] = res
+    return res
 
 # ---------- 6. BACKGROUND MUSIC (soft royalty-free tracks, auto-lowered under the voice) ----------
 # Tracks by Kevin MacLeod (incompetech.com), free under CC BY 4.0 -> put the credit line (saved in out/music_credit.txt) in your video description.
@@ -632,7 +772,27 @@ def write_wav(path, mono):
     with wave.open(str(path), "wb") as f:
         f.setnchannels(2); f.setsampwidth(2); f.setframerate(SR); f.writeframes(st.tobytes())
 
-def add_sound(video, total, offsets, mood, final):
+def voice_track(voices, starts, total, dst):
+    # every scene's voice is placed at an exact time: scene start + TRANS (same clock the captions use)
+    track = np.zeros(int((total + 8) * SR), dtype=np.float32)
+    def load(path, k):
+        tmp = OUT / f"v{k}.wav"
+        run(["ffmpeg", "-y", "-i", str(path), "-ac", "1", "-ar", str(SR), str(tmp)])
+        with wave.open(str(tmp), "rb") as w:
+            return np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32767
+    for k, ((mp3, sfx), st) in enumerate(zip(voices, starts)):
+        pcm = load(mp3, k)
+        a = int(round((st + TRANS) * SR)); b = min(len(track), a + len(pcm))
+        track[a:b] += pcm[: b - a]
+        if sfx:   # real sound effect, right after this scene's narration
+            fx = load(sfx, f"fx{k}")[: int(6 * SR)]
+            fx = fx / (np.max(np.abs(fx)) + 1e-9) * 0.8
+            a2 = b + int(0.15 * SR); b2 = min(len(track), a2 + len(fx))
+            if b2 > a2: track[a2:b2] += fx[: b2 - a2]
+    track = track[: int(total * SR)]
+    write_wav(dst, track / max(1.0, float(np.max(np.abs(track)))))
+
+def add_sound(video, voice_wav, total, offsets, mood, final):
     music_wav = OUT / "music.wav"
     track, credit = get_music(mood)
     if track:   # loop to video length, soft fade in and fade out
@@ -642,17 +802,17 @@ def add_sound(video, total, offsets, mood, final):
     else:
         print("no music could be downloaded, video will have voice + effects only")
         write_wav(music_wav, np.zeros(int(total * SR)))
-    base = ("[0:a]asplit=2[v1][v2];"
-            f"[1:a]aformat=sample_rates=44100:channel_layouts=stereo,volume={MUSIC_VOL}[m];"
+    base = ("[1:a]aformat=sample_rates=44100:channel_layouts=stereo,asplit=2[v1][v2];"
+            f"[2:a]aformat=sample_rates=44100:channel_layouts=stereo,volume={MUSIC_VOL}[m];"
             "[m][v2]sidechaincompress=threshold=0.02:ratio=12:attack=10:release=600[md];"   # music dips while the voice speaks
             "[v1][md]amix=inputs=2:duration=first:dropout_transition=0{NORM}[a]")
     last = None
     for norm, boost in ((":normalize=0", ""), ("", ",volume=2.2")):
         try:
             fc = base.replace("{NORM}", norm).replace("[a]", f"{boost}[a]") if boost else base.replace("{NORM}", norm)
-            run(["ffmpeg", "-y", "-i", str(video), "-i", str(music_wav),
+            run(["ffmpeg", "-y", "-i", str(video), "-i", str(voice_wav), "-i", str(music_wav),
                  "-filter_complex", fc, "-map", "0:v", "-map", "[a]",
-                 "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", str(final)])
+                 "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", str(final)])
             if credit:
                 print("\nPUT THIS IN YOUR VIDEO DESCRIPTION (music credit):\n" + credit + "\n")
             return
@@ -662,9 +822,11 @@ def add_sound(video, total, offsets, mood, final):
 
 # ===== RUN =====
 def build_video(script):
-    mood = script.get("mood", "playful")
+    if SERIES and SERIES.get("character"):
+        script["character"] = SERIES["character"]   # same mascot in every picture of the series
+    mood = (SERIES or {}).get("mood") or script.get("mood", "playful")
     if mood not in MUSIC: mood = "playful"
-    clips, durs = [], []
+    clips, durs, voices = [], [], []
     for i, sc in enumerate(script["scenes"]):
         print(f"scene {i+1}/{len(script['scenes'])}: picture, voice, camera move")
         raw, mp3, clip = OUT / f"s{i}_raw.png", OUT / f"s{i}.mp3", OUT / f"s{i}.mp4"
@@ -672,12 +834,15 @@ def build_video(script):
         make_image(f"{ch}. {sc['image_prompt']}" if ch else sc["image_prompt"], raw, i)
         words = make_voice(sc["narration"], mp3)
         layers = prepare_scene(raw, i, sc["narration"], audio_len(mp3), words)
-        durs.append(scene_clip(layers, mp3, clip, i)); clips.append(clip)
+        sfx, sfx_len = get_sfx(sc.get("sfx", ""))
+        durs.append(scene_clip(layers, mp3, clip, i, extra=(sfx_len + 0.4) if sfx else 0.0)); clips.append(clip); voices.append((mp3, sfx))
     print("joining scenes with transitions + cinematic look...")
     joined = OUT / "joined.mp4"
-    offsets, total = join_many(clips, durs, joined)
-    print(f"adding music ({mood}) and sound effects...")
-    add_sound(joined, total, offsets, mood, OUT / "final.mp4")
+    starts, total = join_many(clips, durs, joined)
+    print(f"adding voice (exact timing) and music ({mood})...")
+    voice_wav = OUT / "voice.wav"
+    voice_track(voices, starts, total, voice_wav)
+    add_sound(joined, voice_wav, total, starts, mood, OUT / "final.mp4")
     return OUT / "final.mp4"
 
 # ---------- 7. YOUTUBE UPLOAD (free YouTube Data API; needs YT_CLIENT_ID, YT_CLIENT_SECRET, YT_REFRESH_TOKEN secrets) ----------
@@ -689,9 +854,11 @@ def upload_youtube(video, title, description, privacy):
         "client_id": cid, "client_secret": csec, "refresh_token": rtok, "grant_type": "refresh_token"})
     tok.raise_for_status()
     access = tok.json()["access_token"]
-    meta = {"snippet": {"title": title[:95], "description": description[:4900], "categoryId": "27",
-                        "tags": ["shorts", "motivation", "education"]},
-            "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False}}
+    tags = ["kids", "learning", "kids videos", CHANNEL_NAME] + (["hindi kahani", "bachon ki kahani"] if LANG == "hi" else ["kids learning", "preschool"])
+    if SERIES: tags.append(SERIES["name"])
+    if not LONG: tags.append("shorts")
+    meta = {"snippet": {"title": title[:100], "description": description[:4900], "categoryId": "27", "tags": tags},
+            "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": True}}   # kids channel: marked "made for kids" as YouTube requires
     size = Path(video).stat().st_size
     r = requests.post("https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
                       headers={"Authorization": f"Bearer {access}", "Content-Type": "application/json; charset=UTF-8",
@@ -707,6 +874,8 @@ def upload_youtube(video, title, description, privacy):
     return vid
 
 ensure_hindi_font()
+if SERIES:
+    setup_series()
 if not TOPIC and LONG:
     TOPIC = f"any original {STORY_GENRE} story idea of your choice"
 if not TOPIC:
@@ -722,6 +891,8 @@ print("3/3 DONE ->", final)
 
 # title + description for the GitHub release (your site) and YouTube
 _title = (script.get("title") or TOPIC).strip()
+if SERIES:   # "F for Fish | ABC with Golu #6" - the episode number is how the next run finds its place
+    _title = f"{_title[:55]} | {SERIES['name']} #{EP}"
 _credit = (OUT / "music_credit.txt").read_text(encoding="utf-8") if (OUT / "music_credit.txt").exists() else ""
 _desc = "\n".join(s["narration"] for s in script["scenes"]) + ("\n\nMusic:\n" + _credit if _credit else "") + ("" if LONG else "\n\n#shorts")
 (OUT / "title.txt").write_text(_title, encoding="utf-8")
