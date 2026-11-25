@@ -15,11 +15,11 @@ on:
         type: choice
         options: ["hi", "en"]
       voice:
-        description: "Voice (f = female, m = male)"
+        description: "Voice (f = female, m = male, f_ai / m_ai = Indic Parler AI voice)"
         required: true
         default: "f"
         type: choice
-        options: ["f", "m"]
+        options: ["f", "m", "f_ai", "m_ai"]
       style:
         description: "Picture style (real = realistic humans, cartoon)"
         required: true
@@ -60,7 +60,7 @@ on:
         required: false
         default: "none"
         type: choice
-        options: ["none", "abc", "colours", "kyun", "aadat", "golu", "bedtime", "jaanwar", "mix12"]
+        options: ["none", "abc", "swar", "vyanjan", "varnamala_full", "abc_full", "colours", "kyun", "aadat", "golu", "bedtime", "jaanwar", "mix12"]
   # Timing is done by cron-job.org (GitHub's own schedule was hours late for this new repo).
 
 permissions:
@@ -85,11 +85,19 @@ jobs:
       - name: Install Python packages
         run: pip install edge-tts requests pillow numpy
 
+      - name: Install AI voice (Indic Parler-TTS, only when f_ai / m_ai is chosen)
+        if: endsWith(inputs.voice, '_ai')
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install git+https://github.com/huggingface/parler-tts.git
+          pip install --force-reinstall --no-deps "protobuf==5.29.5"
+
       - name: Make the video
         env:
           NVIDIA_KEY: ${{ secrets.NVIDIA_KEY }}
           NVIDIA_KEY_2: ${{ secrets.NVIDIA_KEY_2 }}
           FREESOUND_KEY: ${{ secrets.FREESOUND_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
           SERIES: ${{ inputs.series != 'none' && inputs.series || '' }}
           CF_TOKEN: ${{ secrets.CF_TOKEN }}
           TOPIC: ${{ inputs.topic }}
