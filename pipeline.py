@@ -38,11 +38,43 @@ def ask(env, question, default=""):
 # ---------- SERIES (fully automatic channel plan: each daily slot runs one series, the next episode is found by itself) ----------
 GOLU = ("Golu, a small cute cartoon monkey with light brown fur, big round shiny eyes, a red cap and a yellow t-shirt, "
         "same look in every picture")
+# fixed, correct alphabet words (no AI guessing): (letter, word, English picture prompt). word "" = no common word starts with it
+ALPHA = {
+    "swar": [("अ", "अनार", "a red pomegranate cut open showing its red seeds"), ("आ", "आम", "a ripe yellow mango"),
+             ("इ", "इमली", "brown tamarind pods"), ("ई", "ईख", "green sugarcane sticks"), ("उ", "उल्लू", "a cute owl sitting on a branch"),
+             ("ऊ", "ऊन", "colourful balls of wool yarn"), ("ऋ", "ऋषि", "a kind old Indian sage with a white beard sitting calmly"),
+             ("ए", "एड़ी", "a child's bare foot showing the heel"), ("ऐ", "ऐनक", "a pair of round spectacles"),
+             ("ओ", "ओखली", "a stone mortar and pestle"), ("औ", "औरत", "a smiling Indian woman in a colourful saree"),
+             ("अं", "अंगूर", "a bunch of green grapes"), ("अः", "", "")],
+    "vyanjan": [("क", "कबूतर", "a grey pigeon"), ("ख", "खरगोश", "a white rabbit"), ("ग", "गमला", "a flower pot with red flowers"),
+                ("घ", "घड़ी", "a round wall clock"), ("ङ", "", ""), ("च", "चम्मच", "a shiny steel spoon"), ("छ", "छतरी", "an open red umbrella"),
+                ("ज", "जहाज़", "a big ship on the sea"), ("झ", "झंडा", "the flag of India waving"), ("ञ", "", ""),
+                ("ट", "टमाटर", "a red tomato"), ("ठ", "ठेला", "a wooden vegetable hand cart"), ("ड", "डमरू", "a small damru hand drum"),
+                ("ढ", "ढोलक", "a dholak drum"), ("ण", "", ""), ("त", "तरबूज़", "a watermelon cut open"), ("थ", "थरमस", "a thermos flask"),
+                ("द", "दरवाज़ा", "a wooden door"), ("ध", "धनुष", "a toy wooden bow"), ("न", "नल", "a water tap with water flowing"),
+                ("प", "पतंग", "a colourful kite flying in the sky"), ("फ", "फल", "a basket of fruits"), ("ब", "बतख़", "a yellow duck"),
+                ("भ", "भालू", "a brown bear"), ("म", "मछली", "an orange fish in water"), ("य", "योग", "a child doing yoga on a mat"),
+                ("र", "रथ", "a decorated wooden chariot"), ("ल", "लट्टू", "a colourful spinning top"), ("व", "वन", "a green forest with tall trees"),
+                ("श", "शेर", "a lion"), ("ष", "षट्कोण", "a hexagon shaped tile"), ("स", "सेब", "a red apple"), ("ह", "हाथी", "an elephant"),
+                ("क्ष", "क्षत्रिय", "a royal Indian king with a golden crown"), ("त्र", "त्रिकोण", "a triangle shaped slice of watermelon"),
+                ("ज्ञ", "ज्ञानी", "a wise old man reading a book")],
+    "abc": [("A", "Apple", "a shiny red apple"), ("B", "Ball", "a colourful ball"), ("C", "Cat", "a cute cat"), ("D", "Dog", "a happy puppy"),
+            ("E", "Elephant", "an elephant"), ("F", "Fish", "an orange fish in water"), ("G", "Goat", "a white goat"), ("H", "Hat", "a red hat"),
+            ("I", "Ice cream", "an ice cream cone"), ("J", "Jug", "a water jug"), ("K", "Kite", "a colourful kite flying in the sky"),
+            ("L", "Lion", "a lion"), ("M", "Mango", "a ripe yellow mango"), ("N", "Nest", "a bird nest with eggs on a branch"),
+            ("O", "Orange", "an orange fruit"), ("P", "Parrot", "a green parrot"), ("Q", "Queen", "a smiling queen with a golden crown"),
+            ("R", "Rabbit", "a white rabbit"), ("S", "Sun", "a bright smiling sun in a blue sky"), ("T", "Tiger", "a tiger"),
+            ("U", "Umbrella", "an open red umbrella"), ("V", "Van", "a small blue van"), ("W", "Watch", "a wrist watch"),
+            ("X", "Xylophone", "a colourful xylophone"), ("Y", "Yak", "a furry yak on a mountain"), ("Z", "Zebra", "a zebra")],
+}
 SERIES_DEFS = {
-    "abc":     dict(name="ABC with Golu", lang="en", fmt="short", style="cartoon", character=GOLU,
-                    items=[chr(c) for c in range(65, 91)], overlay="{item}{low}",
-                    brief="Teach the letter {item} to small kids: say the letter and its sound, then 3-4 simple words starting with {item} "
-                          "(one word per scene, e.g. '{item} for ...'), Golu shows each object. End with a quick recap of all the words."),
+    "abc":     dict(name="ABC with Golu", lang="en", fmt="short", style="cartoon", character=GOLU, alpha=["abc"], rate="+0%",
+                    start_ep=3),   # episodes 1-2 were the old one-letter videos; from #3 on: about 6 letters per Short
+    "swar":    dict(name="Hindi Swar", lang="hi", fmt="short", style="cartoon", character="", alpha=["swar"], rate="+0%"),
+    "vyanjan": dict(name="Hindi Vyanjan", lang="hi", fmt="short", style="cartoon", character="", alpha=["vyanjan"], rate="+0%"),
+    "varnamala_full": dict(name="Hindi Varnamala Full", lang="hi", fmt="long", style="cartoon", character="",
+                           alpha=["swar", "vyanjan"], rate="+0%"),
+    "abc_full": dict(name="ABC Full", lang="en", fmt="long", style="cartoon", character=GOLU, alpha=["abc"], rate="+0%"),
     "colours": dict(name="Colours & Shapes", lang="en", fmt="short", style="cartoon", character=GOLU,
                     items=["Red", "Blue", "Yellow", "Green", "Orange", "Purple", "Pink", "Brown", "Black", "White",
                            "Circle", "Square", "Triangle", "Star", "Heart", "Rectangle", "Oval", "Diamond"], overlay="{item}",
@@ -57,15 +89,23 @@ SERIES_DEFS = {
     "golu":    dict(name="Golu Ki Kahaniyan", lang="hi", fmt="long", style="cartoon", character=GOLU, genre="moral", minutes=3,
                     niche="an original moral story where Golu the monkey learns a lesson"),
     "bedtime": dict(name="Bedtime Story", lang="hi", fmt="short", style="cartoon", character="", rate="-12%", mood="calm",
-                    niche="one calm, gentle bedtime story for small kids (moon, stars, sleepy animals, kind friends) that ends with everyone falling asleep"),
+                    niche="one calm, gentle bedtime story for small kids (moon, stars, sleepy animals, kind friends) that ends with everyone falling asleep",
+                    rules="It is a soft, slow bedtime story told by a parent at night, ONE simple story (not a list). NO questions to the viewer, "
+                          "NO clapping or 'ताली बजाओ', NO excitement, NO sound words, NO counting games, NO 'follow / share / subscribe'. "
+                          "The last scene ends softly with everyone asleep and a gentle 'शुभ रात्रि'."),
     "jaanwar": dict(name="Jaanwar Ki Awaaz", lang="hi", fmt="short", style="cartoon", character="", sfx=True,
                     items=["cow", "dog", "cat", "lion", "elephant", "horse", "goat", "sheep", "duck", "rooster", "frog", "owl",
                            "monkey", "pig", "donkey", "crow", "parrot", "wolf", "bee", "cuckoo"],
                     brief="Teach small kids about the {item}: what it looks like, where it lives, what it eats and ONE fun fact. "
+                          "Say the name of its sound once in words (e.g. 'कुत्ता भौं-भौं करता है', 'गाय बाँ-बाँ करती है'). "
                           "Two scenes must play its REAL sound: add \"sfx\": \"{item} sound\" to scene 2 and to the last scene, "
-                          "and in those scenes say 'Suno!' (listen) - never imitate the sound with words."),
+                          "and in those scenes say 'सुनो!' (listen) right before the sound.",
+                    rules="Use only real, specific facts about this animal (what it eats, where it lives, how it helps people). "
+                          "NO vague filler like 'उसका रंग अलग-अलग हो सकता है' or 'ये है उसका खास पॉइंट'."),
 }
-_ser = ask("SERIES", "Series - abc, colours, kyun, aadat, golu, bedtime, jaanwar, mix12 or none [none]: ", "").strip().lower()
+SERIES_DEFS["kyun"]["rules"] = "Give the real, correct scientific answer in very simple words, step by step. NO filler lines."
+SERIES_DEFS["colours"]["rules"] = "Write natural English a mother would say to a 4 year old: short, correct, simple sentences."
+_ser = ask("SERIES", "Series - abc, swar, vyanjan, varnamala_full, abc_full, colours, kyun, aadat, golu, bedtime, jaanwar, mix12 or none [none]: ", "").strip().lower()
 if _ser == "mix12":   # 12 PM slot: animal sounds and why-questions on alternate days
     _ser = ["jaanwar", "kyun"][time.gmtime().tm_yday % 2]
 if _ser == "jaanwar" and not (os.environ.get("FREESOUND_KEY", "").strip() or os.environ.get("GITHUB_ACTIONS") is None):
@@ -91,8 +131,9 @@ AUTO_NICHE = os.environ.get("AUTO_NICHE", "").strip() or (
 CHANNEL_NAME = os.environ.get("CHANNEL_NAME", "").strip() or "Kidzivora"   # shown as a © watermark on every video
 _lang = os.environ["VIDEO_LANG"] if SERIES else ask("VIDEO_LANG", "Language - en or hi (hindi) [en]: ", "hi")
 LANG = "hi" if _lang.strip().lower().startswith("h") else "en"
-_voice = ask("VOICE_GENDER", "Voice - m (male) or f (female) [f]: ", "f")
+_voice = ask("VOICE_GENDER", "Voice - f (female), m (male), f_ai / m_ai (Indic Parler AI voice) [f]: ", "f")
 VOICE_GENDER = "m" if _voice.strip().lower().startswith("m") else "f"
+VOICE_ENGINE = "parler" if _voice.strip().lower().endswith("_ai") else "edge"   # parler = AI4Bharat Indic Parler-TTS (more natural, slower, needs HF_TOKEN)
 _style = os.environ["IMAGE_STYLE"] if SERIES else ask("IMAGE_STYLE", "Picture style - real (realistic humans) or cartoon [real]: ", "real")
 IMAGE_STYLE = "cartoon" if _style.strip().lower().startswith("c") else "real"
 _fmt = os.environ["VIDEO_FORMAT"] if SERIES else ask("VIDEO_FORMAT", "Video type - short (9:16, about 60 sec) or long (16:9 story video) [short]: ", "short")
@@ -111,7 +152,7 @@ if LONG:
         LONG_MINUTES = 5
 
 # ---------- CONSTANTS ----------
-SCENES = LONG_MINUTES * 9 if LONG else 10   # ~15 words per scene: 10 scenes = about 60 seconds, 9 scenes per minute for long stories
+SCENES = LONG_MINUTES * 9 if LONG else 7    # ~14 words per scene: 7 scenes = about 40 seconds, 9 scenes per minute for long stories
 W, H, FPS = (1920, 1080, 25) if LONG else (1080, 1920, 25)
 IMG_W, IMG_H = (1344, 768) if LONG else (768, 1344)
 TRANS = 0.36          # seconds of cross-transition between scenes (also the voice lead-in); 0.36 s = exactly 9 frames, keeps picture and voice in sync
@@ -159,15 +200,18 @@ def run(cmd):
 
 # ---------- 1. SCRIPT (NVIDIA free API) ----------
 def write_script():
+    if SERIES and SERIES.get("alpha"):
+        return alpha_script()
     base = "https://integrate.api.nvidia.com/v1"
     hdr = {"Authorization": f"Bearer {NVIDIA_KEY}"}
     language = "Hindi (Devanagari script), simple everyday spoken Hindi - not formal or shuddh Hindi" if LANG == "hi" else "simple English"
-    prompt = f"""You are a top short-video storyteller. Write a 60 second vertical video script about: "{TOPIC}".
+    prompt = f"""You are a top short-video storyteller. Write a 40 second vertical video script about: "{TOPIC}".
 Narration language: {language}.
 RULES for narration:
 - Scene 1 is a strong HOOK (a surprising question or bold line), not an introduction.
-- Short, punchy sentences. Each scene 14-17 words (total about 150-160 words, so the video is about 60 seconds).
+- Short, punchy sentences. Each scene 13-15 words (total about 95-105 words, so the video is about 40 seconds).
 - Sound like a real Indian kids' YouTuber talking to a 4-7 year old, NOT like an AI or a textbook: warm, excited, everyday spoken words kids hear at home (in Hindi, common English words like colour, ball, school, bus are fine).
+- Write the way a native speaker really talks: correct, natural grammar (in English never write odd lines like "Is your name starting with...").
 - Vary every sentence: different openings, mix in questions ("बताओ तो...?" / "Can you guess...?"), sounds ("दहाड़! रोओओर!" / "Moo!"), tiny actions ("ताली बजाओ!" / "Clap with me!"), counting and one small surprise. Never start two scenes the same way.
 - No filler or repeated praise: words like प्यारा/प्यारी, चमकीला, मज़ेदार, कितना, देखो (or cute, amazing, look) may appear at most ONCE in the whole script.
 - Build a mini story: setup, tension or fun conflict, twist, takeaway.
@@ -266,6 +310,7 @@ Story so far ends with: "{recent or '(this is the beginning)'}"
 Write exactly {k} scenes that continue smoothly from the story so far.
 Narration language: {language}. Each scene 14-17 words, like a grandparent telling a bedtime story: simple, vivid, with feelings, some dialogue between characters and sound words.
 - Sound like a real Indian kids' YouTuber talking to a 4-7 year old, NOT like an AI or a textbook: warm, excited, everyday spoken words kids hear at home (in Hindi, common English words like colour, ball, school, bus are fine).
+- Write the way a native speaker really talks: correct, natural grammar (in English never write odd lines like "Is your name starting with...").
 - Vary every sentence: different openings, mix in questions ("बताओ तो...?" / "Can you guess...?"), sounds ("दहाड़! रोओओर!" / "Moo!"), tiny actions ("ताली बजाओ!" / "Clap with me!"), counting and one small surprise. Never start two scenes the same way.
 - No filler or repeated praise: words like प्यारा/प्यारी, चमकीला, मज़ेदार, कितना, देखो (or cute, amazing, look) may appear at most ONCE in the whole script.
 {"The last scene must end the story and say the lesson clearly, then ask kids to like and subscribe." if ci == chapters - 1 else "Do not end the story yet."}
@@ -281,7 +326,10 @@ RULES for pictures:
 
 def series_line():
     if not SERIES: return ""
-    s = f"This is episode {EP} of the kids' series \"{SERIES['name']}\" on the channel {CHANNEL_NAME}. The title should be short and searchable.\n"
+    s = (f"This is episode {EP} of the kids' series \"{SERIES['name']}\" on the channel {CHANNEL_NAME}. The title should be short and searchable. "
+         f"Do NOT put the series name or an episode number in the title (they are added automatically).\n")
+    if SERIES.get("rules"):
+        s += f"SERIES RULES (these override the general rules above): {SERIES['rules']}\n"
     if SERIES.get("character"):
         s += f"The main character in every picture is {SERIES['character']}. Do not invent other main characters.\n"
     return s
@@ -370,7 +418,10 @@ def setup_series():
     pairs = [(t, int(m.group(1))) for t in done for m in [re.search(r"#(\d+)", t.split(SERIES["name"])[-1])] if m]
     done, nums = [p[0] for p in pairs] or done, [p[1] for p in pairs]
     EP = (max(nums) + 1) if nums else 1
-    if SERIES.get("items"):          # fixed order: A, B, C ... / Red, Blue ... / cow, dog ...
+    if SERIES.get("alpha"):          # alphabet series: fixed letters + words, no AI script (always correct)
+        EP = max(EP, SERIES.get("start_ep", 1))
+        TOPIC = alpha_topic()
+    elif SERIES.get("items"):          # fixed order: A, B, C ... / Red, Blue ... / cow, dog ...
         items = SERIES["items"]
         item = items[(EP - 1) % len(items)]
         kind = "shape" if SERIES_KEY == "colours" and items.index(item) >= 10 else "colour"
@@ -385,6 +436,62 @@ def setup_series():
     else:                            # open series: the AI picks a new idea that was not done before
         TOPIC = auto_topic(SERIES["niche"], done)
     print(f"{SERIES['name']} - episode {EP}: {TOPIC[:90]}")
+
+ALPHA_PER_SHORT = 6   # letters in one Short (about 35-40 seconds)
+
+def alpha_letters():
+    # Shorts: the next group of about 6 letters (the list starts again after the last group); long videos: every letter
+    rows = [r for key in SERIES["alpha"] for r in ALPHA[key]]
+    if LONG:
+        return rows
+    groups = math.ceil(len(rows) / ALPHA_PER_SHORT)
+    base, extra = divmod(len(rows), groups)          # even groups, e.g. A-Z = 6,5,5,5,5
+    g = (EP - SERIES.get("start_ep", 1)) % groups
+    a = g * base + min(g, extra)
+    return rows[a:a + base + (1 if g < extra else 0)]
+
+def alpha_topic():
+    rows = alpha_letters()
+    return f"alphabet {rows[0][0]} to {rows[-1][0]}"
+
+def alpha_script():
+    # "अ! अ से अनार। अ... अ... अनार!" / "A! A for Apple. A, A, Apple!" - one letter per scene, big letter drawn by the code
+    rows, hi = alpha_letters(), LANG == "hi"
+    first, last = rows[0][0], rows[-1][0]
+    kid_pic = "happy cartoon kids smiling and waving in a bright colourful classroom"
+    scenes = [{"narration": (f"चलो, आज सीखते हैं {first} से {last} तक! मेरे साथ बोलो!" if hi
+                             else f"Let's learn the letters {first} to {last}! Say them with me!"),
+               "image_prompt": kid_pic, "overlay": f"{first} - {last}"}]
+    for L, word, pic in rows:
+        if word:
+            say = f"{L}! {L} से {word}। {L}... {L}... {word}!" if hi else f"{L}! {L} for {word}. {L}, {L}, {word}!"
+            if LONG:
+                say += f" मेरे साथ बोलो, {L} से {word}!" if hi else f" Say it with me: {L} for {word}!"
+        else:   # ङ ञ ण अः - no common word starts with these letters
+            say = f"{L}! {L}... {L}... मेरे साथ बोलो, {L}!" if hi else f"{L}! {L}, {L}!"
+            pic = "a cute cartoon child smiling and pointing up, plain bright background"
+        scenes.append({"narration": say, "image_prompt": f"{pic}, big and clear in the centre, simple bright background",
+                       "overlay": L})
+    recap = (", ".join(f"{L} से {w}" for L, w, _ in rows if w) if hi else ", ".join(f"{L} for {w}" for L, w, _ in rows if w))
+    scenes.append({"narration": (f"शाबाश! {recap}। रोज़ नया सीखने के लिए सब्सक्राइब करो!" if hi
+                                 else f"Great job! {recap}. Subscribe to learn more every day!"),
+                   "image_prompt": kid_pic, "overlay": f"{first} - {last}"})
+    w1 = [r for r in rows if r[1]][:2]
+    if LONG:
+        title = (f"पूरी वर्णमाला: {first} से {last} तक | {w1[0][0]} से {w1[0][1]}" if hi
+                 else f"A to Z Alphabet: {first} for {rows[0][1]} to {last} for {rows[-1][1]}")
+    else:
+        title = (", ".join(f"{L} से {w}" for L, w, _ in w1) + f" | {first} से {last}" if hi
+                 else ", ".join(f"{L} for {w}" for L, w, _ in w1) + f" | Letters {first} to {last}")
+    return {"title": title, "mood": "playful", "character": "", "scenes": scenes}
+
+def clean_title(t):
+    # the AI sometimes adds the series name / "Ep 1" itself -> remove it, the code adds "| Series #n" once
+    if SERIES:
+        t = re.sub(re.escape(SERIES["name"].rstrip("?")) + r"\??", "", t, flags=re.I)
+    t = re.sub(r"(?i)\b(ep|episode)\.?\s*\d+|#\s*\d+", "", t)
+    t = re.sub(r"\s*[|:\-–]\s*([|:\-–]\s*)+", " | ", t)
+    return t.strip(" |:-–") or (TOPIC or "")[:60]
 
 def auto_topic(niche=None, done=None):
     lang = "Hindi written in English letters (Hinglish)" if LANG == "hi" else "English"
@@ -487,8 +594,57 @@ async def _tts(text, out):
                 words.append((st, st + ch["duration"] / 1e7, ch["text"]))
     return words
 
+PARLER = {}   # loaded once, only when the AI voice is chosen
+
+def _parler_load():
+    if not PARLER:
+        import torch
+        from parler_tts import ParlerTTSForConditionalGeneration
+        from transformers import AutoTokenizer
+        dev = "cuda:0" if torch.cuda.is_available() else "cpu"
+        if dev == "cpu":
+            torch.set_num_threads(os.cpu_count() or 4)
+        print(f"loading Indic Parler-TTS on {dev} (first time downloads ~3.5 GB)...")
+        m = ParlerTTSForConditionalGeneration.from_pretrained("ai4bharat/indic-parler-tts").to(dev)
+        PARLER.update(model=m, dev=dev, torch=torch,
+                      tok=AutoTokenizer.from_pretrained("ai4bharat/indic-parler-tts"),
+                      dtok=AutoTokenizer.from_pretrained(m.config.text_encoder._name_or_path))
+    return PARLER
+
+def _parler_tts(text, out):
+    P = _parler_load()
+    calm = (SERIES or {}).get("mood") == "calm"
+    who = "Rohit" if VOICE_GENDER == "m" else "Divya"
+    tone = ("a soft, calm and gentle tone at a slow pace, like a parent at bedtime" if calm else
+            "a happy, warm and expressive tone at a moderate pace, like telling a story to small children")
+    desc = f"{who} speaks in {tone}. Very clear audio with no background noise."
+    d = P["dtok"](desc, return_tensors="pt").to(P["dev"])
+    t = P["tok"](text, return_tensors="pt").to(P["dev"])
+    with P["torch"].no_grad():
+        g = P["model"].generate(input_ids=d.input_ids, attention_mask=d.attention_mask,
+                                prompt_input_ids=t.input_ids, prompt_attention_mask=t.attention_mask)
+    pcm = g.cpu().numpy().squeeze()
+    wav = Path(str(out) + ".wav")
+    write_wav_rate(wav, pcm, P["model"].config.sampling_rate)
+    run(["ffmpeg", "-y", "-i", str(wav), "-ar", str(SR), "-b:a", "192k", str(out)])
+
+def write_wav_rate(path, mono, rate):
+    pcm = (np.clip(mono, -1, 1) * 32767).astype(np.int16)
+    with wave.open(str(path), "wb") as f:
+        f.setnchannels(1); f.setsampwidth(2); f.setframerate(rate); f.writeframes(pcm.tobytes())
+
 def make_voice(text, out):
     # returns [(start_sec, end_sec, word), ...] for word-by-word captions (empty list = fall back to old captions)
+    global VOICE_ENGINE
+    if VOICE_ENGINE == "parler":
+        try:
+            t0 = time.time()
+            _parler_tts(text, out)
+            print(f"  AI voice made in {time.time() - t0:.0f} s")
+            return []   # Parler gives no word timings -> captions in timed groups of 4 words
+        except Exception as e:
+            print("  AI voice failed -> using the normal voice for the rest of this video:", str(e)[:200])
+            VOICE_ENGINE = "edge"
     with ThreadPoolExecutor() as ex:   # thread, because Colab already has a running event loop
         return ex.submit(asyncio.run, _tts(text, out)).result()
 
@@ -567,7 +723,15 @@ def word_caption_png(words, hi, y_start, dst):
             x += ww + space
     layer.save(dst)
 
-def prepare_scene(raw, idx, text, voice_dur, words=None):
+def overlay_png(text, dst):
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    big = get_font(230 if len(text) <= 3 else 130, text)
+    bw = d.textlength(text, font=big)
+    d.text(((W - bw) / 2, 110 if not LONG else 40), text, font=big, fill=(255, 224, 40, 255), stroke_width=14, stroke_fill=(0, 0, 0, 255))
+    layer.save(dst)
+
+def prepare_scene(raw, idx, text, voice_dur, words=None, overlay=""):
     img = Image.open(raw).convert("RGB")
     fx = 0
     if LONG:     # 16:9 frame: wide picture fills it; square picture centred with a blurred copy at the sides
@@ -596,6 +760,9 @@ def prepare_scene(raw, idx, text, voice_dur, words=None):
     bg_p, fg_p = OUT / f"s{idx}_bg.png", OUT / f"s{idx}_fg.png"
     bg.save(bg_p); fg.save(fg_p)
     caps = []
+    if overlay:   # big letter for the whole scene (alphabet series)
+        op = OUT / f"s{idx}_ov.png"; overlay_png(overlay, op)
+        caps.append((op, 0, 9999))
     if words:   # word-by-word captions: groups of 3 words, the spoken word highlighted
         for g in range(0, len(words), 3):
             grp = words[g:g + 3]
@@ -833,7 +1000,7 @@ def build_video(script):
         ch = str(script.get("character", "") or "").strip()
         make_image(f"{ch}. {sc['image_prompt']}" if ch else sc["image_prompt"], raw, i)
         words = make_voice(sc["narration"], mp3)
-        layers = prepare_scene(raw, i, sc["narration"], audio_len(mp3), words)
+        layers = prepare_scene(raw, i, sc["narration"], audio_len(mp3), words, sc.get("overlay", ""))
         sfx, sfx_len = get_sfx(sc.get("sfx", ""))
         durs.append(scene_clip(layers, mp3, clip, i, extra=(sfx_len + 0.4) if sfx else 0.0)); clips.append(clip); voices.append((mp3, sfx))
     print("joining scenes with transitions + cinematic look...")
@@ -892,7 +1059,7 @@ print("3/3 DONE ->", final)
 # title + description for the GitHub release (your site) and YouTube
 _title = (script.get("title") or TOPIC).strip()
 if SERIES:   # "F for Fish | ABC with Golu #6" - the episode number is how the next run finds its place
-    _title = f"{_title[:55]} | {SERIES['name']} #{EP}"
+    _title = f"{clean_title(_title)[:55]} | {SERIES['name']} #{EP}"
 _credit = (OUT / "music_credit.txt").read_text(encoding="utf-8") if (OUT / "music_credit.txt").exists() else ""
 _desc = "\n".join(s["narration"] for s in script["scenes"]) + ("\n\nMusic:\n" + _credit if _credit else "") + ("" if LONG else "\n\n#shorts")
 (OUT / "title.txt").write_text(_title, encoding="utf-8")
