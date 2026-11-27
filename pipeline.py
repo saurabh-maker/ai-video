@@ -578,12 +578,13 @@ def make_image(prompt, path, idx):
     placeholder(path, idx)
 
 # ---------- 3. VOICE (edge-tts, free) ----------
-async def _tts(text, out):
+async def _tts(text, out, voice=None):
     import edge_tts
+    voice = voice or VOICES[(LANG, VOICE_GENDER)]
     try:
-        com = edge_tts.Communicate(text, VOICES[(LANG, VOICE_GENDER)], rate=VOICE_RATE, boundary="WordBoundary")
+        com = edge_tts.Communicate(text, voice, rate=VOICE_RATE, boundary="WordBoundary")
     except TypeError:   # older edge-tts gives word timings by default
-        com = edge_tts.Communicate(text, VOICES[(LANG, VOICE_GENDER)], rate=VOICE_RATE)
+        com = edge_tts.Communicate(text, voice, rate=VOICE_RATE)
     words = []
     with open(out, "wb") as f:
         async for ch in com.stream():
@@ -645,8 +646,30 @@ def make_voice(text, out):
         except Exception as e:
             print("  AI voice failed -> using the normal voice for the rest of this video:", str(e)[:200])
             VOICE_ENGINE = "edge"
-    with ThreadPoolExecutor() as ex:   # thread, because Colab already has a running event loop
-        return ex.submit(asyncio.run, _tts(text, out)).result()
+    # Microsoft's free voice sometimes sends no audio (busy server, or a symbol/emoji it cannot read):
+    # retry with waits, then with the text cleaned, then with the other voice of the same language, then 1 s of silence
+    clean = re.sub(r"[^\w\s\u0900-\u097F.,!?;:'\"()\-\u0964]", " ", text)
+    clean = re.sub(r"\s+", " ", clean).strip() or "..."
+    other = VOICES[(LANG, "m" if VOICE_GENDER == "f" else "f")]
+    tries = [(text, None, 0), (text, None, 4), (clean, None, 8), (clean, None, 15), (clean, other, 5)]
+    last = None
+    for n, (t, v, wait) in enumerate(tries, 1):
+        if wait:
+            time.sleep(wait)
+        try:
+            with ThreadPoolExecutor() as ex:   # thread, because Colab already has a running event loop
+                words = ex.submit(asyncio.run, _tts(t, out, v)).result()
+            if Path(out).exists() and Path(out).stat().st_size > 1000:
+                if n > 1:
+                    print(f"  voice worked on try {n}" + (" (other voice)" if v else ""))
+                return words
+            raise RuntimeError("empty audio file")
+        except Exception as e:
+            last = e
+            print(f"  voice try {n}/{len(tries)} failed: {str(e)[:100]}")
+    print("  voice failed 5 times -> 1 second of silence for this scene so the video still finishes:", str(last)[:100])
+    run(["ffmpeg", "-y", "-f", "lavfi", "-i", f"anullsrc=r={SR}:cl=mono", "-t", "1", "-b:a", "64k", str(out)])
+    return []
 
 def audio_len(p):
     return float(run(["ffprobe","-v","error","-show_entries","format=duration","-of","csv=p=0",str(p)]).strip())
